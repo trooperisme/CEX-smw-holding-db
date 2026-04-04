@@ -1,12 +1,8 @@
 import fs from "node:fs";
 import path from "node:path";
-import { promisify } from "node:util";
-import { execFile } from "node:child_process";
 import { ensureDirExists, resolveWorkspacePaths } from "./runtime-paths";
 import { TraderPosition, TraderPositionSide, TrackedTrader } from "./types";
 import { classifySignalMarketType } from "./trader-registry";
-
-const execFileAsync = promisify(execFile);
 
 type ScrapeHypurrscanOptions = {
   cwd: string;
@@ -72,12 +68,50 @@ function parsePerpsTable(markdown: string): Array<{
   return positions;
 }
 
-async function runFirecrawlScrape(url: string, outputPath: string, cwd: string): Promise<void> {
-  await execFileAsync(
-    "firecrawl",
-    ["scrape", url, "--only-main-content", "--wait-for", "3000", "-o", outputPath],
-    { cwd, maxBuffer: 20 * 1024 * 1024 },
-  );
+async function runFirecrawlScrape(url: string, outputPath: string): Promise<void> {
+  const apiKey = process.env.FIRECRAWL_API_KEY?.trim();
+  if (!apiKey) {
+    throw new Error("FIRECRAWL_API_KEY is required for Hypurrscan scraping");
+  }
+
+  const response = await fetch("https://api.firecrawl.dev/v2/scrape", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify({
+      url,
+      formats: ["markdown"],
+      maxAge: 0,
+      storeInCache: false,
+      proxy: "auto",
+      removeBase64Images: true,
+      blockAds: true,
+    }),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Firecrawl scrape failed (${response.status}): ${text}`);
+  }
+
+  const payload = (await response.json()) as {
+    success?: boolean;
+    data?: { markdown?: string };
+    error?: string;
+  };
+
+  if (!payload.success) {
+    throw new Error(payload.error || "Firecrawl returned an unsuccessful response");
+  }
+
+  const markdown = String(payload.data?.markdown || "").trim();
+  if (!markdown) {
+    throw new Error("Firecrawl returned empty markdown");
+  }
+
+  fs.writeFileSync(outputPath, markdown, "utf-8");
 }
 
 export async function scrapeHypurrscanSignals(
@@ -89,7 +123,7 @@ export async function scrapeHypurrscanSignals(
   ensureDirExists(scrapeDir);
   const outputPath = path.join(scrapeDir, `${trader.walletAddress}.md`);
 
-  await runFirecrawlScrape(trader.hypurrscanUrl, outputPath, options.cwd);
+  await runFirecrawlScrape(trader.hypurrscanUrl, outputPath);
   const markdown = fs.readFileSync(outputPath, "utf-8");
   const positions = parsePerpsTable(markdown);
 
