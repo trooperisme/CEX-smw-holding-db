@@ -1,0 +1,13 @@
+node_modules/
+dist/
+.env
+.DS_Store
+browser-profile/
+browser-profile-retry-*/
+screenshots/
+runs/
+data/
+output/playwright/
+tmp/
+*.log
+.agency-agents/

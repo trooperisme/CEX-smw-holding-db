@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Hypurrscan Signals</title>
+    <link rel="stylesheet" href="/dashboard/styles.css" />
+  </head>
+  <body>
+    <main class="app-shell">
+      <section class="hero-panel">
+        <div class="hero-copy">
+          <p class="eyebrow">Tracked Trader Signals</p>
+          <h1>Hypurrscan Signals</h1>
+          <p class="hero-meta" id="hero-meta">Loading latest snapshot...</p>
+        </div>
+
+        <div class="hero-actions">
+          <button class="action-button action-button--primary" id="refresh-button" type="button">
+            Refresh Signals
+          </button>
+          <button class="action-button" id="logout-button" type="button">Log out</button>
+        </div>
+      </section>
+
+      <section class="control-panel">
+        <div class="control-block">
+          <label class="field-label" for="snapshot-select">Snapshot</label>
+          <select id="snapshot-select"></select>
+        </div>
+        <div class="control-block">
+          <span class="field-label">Market</span>
+          <div class="tab-list" id="market-tabs">
+            <button class="tab-button is-active" type="button" data-market="crypto">Crypto</button>
+            <button class="tab-button" type="button" data-market="tradfi">TradFi</button>
+          </div>
+        </div>
+        <div class="summary-strip">
+          <span class="pill" id="summary-status">Idle</span>
+          <span class="pill" id="summary-traders">0 traders</span>
+          <span class="pill" id="summary-positions">0 positions</span>
+        </div>
+      </section>
+
+      <section class="table-panel">
+        <div class="table-topline">
+          <div>
+            <h2 id="table-title">Crypto</h2>
+            <p id="table-subtitle">Latest token-level signals from your tracked traders.</p>
+          </div>
+          <div class="table-status" id="table-status">0 rows</div>
+        </div>
+
+        <div class="status-banner" id="status-banner" hidden></div>
+
+        <div class="table-wrap">
+          <table class="signals-table">
+            <thead>
+              <tr>
+                <th>Token</th>
+                <th>
+                  <button class="sort-button" type="button" data-sort-key="smwFlows">
+                    <span>SMW Flows</span>
+                    <span class="sort-indicator" aria-hidden="true">-</span>
+                  </button>
+                </th>
+                <th>
+                  <button class="sort-button" type="button" data-sort-key="holdingsUsd">
+                    <span>Holdings</span>
+                    <span class="sort-indicator" aria-hidden="true">-</span>
+                  </button>
+                </th>
+                <th>
+                  <button class="sort-button" type="button" data-sort-key="longSmw">
+                    <span>Long SMW</span>
+                    <span class="sort-indicator" aria-hidden="true">-</span>
+                  </button>
+                </th>
+                <th>
+                  <button class="sort-button" type="button" data-sort-key="shortSmw">
+                    <span>Short SMW</span>
+                    <span class="sort-indicator" aria-hidden="true">-</span>
+                  </button>
+                </th>
+              </tr>
+            </thead>
+            <tbody id="table-body"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+    <script src="/dashboard/holdings.js" defer></script>
+  </body>
+</html>

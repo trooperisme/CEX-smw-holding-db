@@ -1,0 +1,503 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Top Holdings Export</title>
+    <style>
+      :root {
+        --bg: #0b0f18;
+        --panel: #12182a;
+        --panel-soft: #171f36;
+        --text: #e7ecf7;
+        --muted: #99a7c2;
+        --accent: #67d1ff;
+        --line: #26304a;
+        --good: #5de3a6;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+        background: radial-gradient(circle at 20% 0%, #1c2948 0%, var(--bg) 45%);
+        color: var(--text);
+      }
+
+      main {
+        max-width: 1280px;
+        margin: 0 auto;
+        padding: 24px;
+      }
+
+      h1 {
+        margin: 0 0 6px;
+        font-size: 30px;
+      }
+
+      .sub {
+        color: var(--muted);
+        margin-bottom: 20px;
+      }
+
+      .cards {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(180px, 1fr));
+        gap: 12px;
+        margin-bottom: 20px;
+      }
+
+      .card {
+        background: linear-gradient(180deg, var(--panel-soft), var(--panel));
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 14px;
+      }
+
+      .card .k {
+        color: var(--muted);
+        font-size: 12px;
+        margin-bottom: 8px;
+      }
+
+      .card .v {
+        font-size: 22px;
+        font-weight: 700;
+      }
+
+      .section {
+        background: linear-gradient(180deg, var(--panel), #10162a);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 14px;
+        margin-bottom: 14px;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+
+      th,
+      td {
+        text-align: left;
+        padding: 10px 8px;
+        border-bottom: 1px solid var(--line);
+        vertical-align: top;
+      }
+
+      th {
+        font-size: 12px;
+        color: var(--muted);
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+
+      td {
+        font-size: 14px;
+      }
+
+      .num {
+        text-align: right;
+        white-space: nowrap;
+      }
+
+      .tag {
+        display: inline-block;
+        border: 1px solid var(--line);
+        color: var(--muted);
+        border-radius: 999px;
+        padding: 3px 9px;
+        font-size: 12px;
+      }
+
+      .entity-list {
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .token-name {
+        font-weight: 600;
+      }
+
+      .chain-badges {
+        display: flex;
+        gap: 6px;
+        align-items: center;
+        flex-wrap: wrap;
+      }
+
+      .chain-badge {
+        width: 20px;
+        height: 20px;
+        border-radius: 50%;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 11px;
+        border: 1px solid rgba(255, 255, 255, 0.25);
+      }
+
+      .chain-ethereum {
+        background: #6f8098;
+        color: #fff;
+      }
+
+      .chain-base {
+        background: #ffffff;
+        color: #1b4dff;
+        font-weight: 700;
+      }
+
+      .chain-arbitrum {
+        background: #253f6a;
+        color: #d8ecff;
+        font-weight: 700;
+      }
+
+      .chain-bnb {
+        background: #111111;
+        color: #f3ba2f;
+        font-weight: 700;
+      }
+
+      .chain-solana {
+        background: #111320;
+        color: #75f0c8;
+        font-weight: 700;
+      }
+
+      .chain-sonic {
+        background: #1f314d;
+        color: #d8e9ff;
+        font-weight: 700;
+      }
+
+      .chain-unichain {
+        background: #ff3bb2;
+        color: #fff;
+        font-weight: 700;
+      }
+
+      .chain-worldchain {
+        background: #080808;
+        color: #efefef;
+        font-weight: 700;
+      }
+
+      .chain-monad {
+        background: #5d4dff;
+        color: #ece8ff;
+        font-weight: 700;
+      }
+
+      .chain-hyperevm {
+        background: #08312d;
+        color: #7ff0e2;
+        font-weight: 700;
+      }
+
+      .chain-unknown {
+        background: #2f3a52;
+        color: #a5b6d4;
+      }
+
+      .good {
+        color: var(--good);
+      }
+
+      @media (max-width: 920px) {
+        .cards {
+          grid-template-columns: repeat(2, minmax(140px, 1fr));
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Top Holdings Export</h1>
+      <p class="sub" id="meta"></p>
+
+      <section class="cards" id="summary-cards"></section>
+
+      <section class="section">
+        <h2>Entity Totals</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Entity</th>
+              <th class="num">Tokens</th>
+              <th class="num">Total Held ($)</th>
+            </tr>
+          </thead>
+          <tbody id="entity-body"></tbody>
+        </table>
+      </section>
+
+      <section class="section">
+        <h2>Combined Token View</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Token</th>
+              <th>Chain</th>
+              <th class="num">Market Cap</th>
+              <th class="num">SMW In</th>
+              <th class="num">% Watchlist</th>
+              <th class="num">Total Held ($)</th>
+              <th>Entities Holding</th>
+            </tr>
+          </thead>
+          <tbody id="token-body"></tbody>
+        </table>
+      </section>
+    </main>
+
+    <script id="snapshot-data" type="application/json">
+      {
+        "generated_at": "template",
+        "min_holding_usd": 555,
+        "entities": []
+      }
+    </script>
+    <script>
+      const fmtUsd = (value) =>
+        Number(value || 0).toLocaleString("en-US", {
+          style: "currency",
+          currency: "USD",
+          maximumFractionDigits: 2,
+        });
+
+      const fmtMarketCap = (value) => {
+        if (!Number.isFinite(value) || value <= 0) return "N/A";
+        if (value >= 1_000_000_000_000) return `$${(value / 1_000_000_000_000).toFixed(2)}T`;
+        if (value >= 1_000_000_000) return `$${(value / 1_000_000_000).toFixed(2)}B`;
+        if (value >= 1_000_000) return `$${(value / 1_000_000).toFixed(2)}M`;
+        if (value >= 1_000) return `$${(value / 1_000).toFixed(2)}K`;
+        return `$${value.toFixed(2)}`;
+      };
+
+      const TOKEN_CHAIN_HINTS = {
+        stHYPE: ["hyperevm"],
+        DRV: ["base"],
+        REI: ["base"],
+        BNKR: ["base"],
+        WHYPE: ["hyperevm"],
+        CARDS: ["solana"],
+        SIRE: ["base"],
+        SDT: ["ethereum"],
+        ETH: ["ethereum", "arbitrum", "base", "worldchain"],
+        WAVE: ["base"],
+        USDC: ["ethereum", "arbitrum", "base", "solana", "unichain", "sonic"],
+        NEMESIS: ["base"],
+        "yb-cbBTC": ["ethereum"],
+        "yb-WBTC": ["ethereum"],
+        KUDAI: ["base"],
+        MON: ["monad"],
+        DKING: ["base"],
+        "yb-tBTC": ["ethereum"],
+        MIRA: ["base"],
+        DEGENC: ["base"],
+        USDT: ["ethereum", "binancesmartchain"],
+        VVV: ["base"],
+        DIEM: ["base"],
+        wkeyDAO: ["ethereum"],
+        NVIDIA: ["ethereum"],
+        IDIDOS: ["base"],
+        HYPE: ["hyperevm"],
+        cbBTC: ["base"],
+        reUSD: ["ethereum"],
+      };
+
+      const CHAIN_META = {
+        ethereum: { label: "Ethereum", glyph: "E", className: "chain-ethereum" },
+        base: { label: "Base", glyph: "■", className: "chain-base" },
+        arbitrum: { label: "Arbitrum", glyph: "A", className: "chain-arbitrum" },
+        binancesmartchain: { label: "BNB Chain", glyph: "B", className: "chain-bnb" },
+        monad: { label: "Monad", glyph: "M", className: "chain-monad" },
+        hyperevm: { label: "HyperEVM", glyph: "H", className: "chain-hyperevm" },
+        solana: { label: "Solana", glyph: "S", className: "chain-solana" },
+        sonic: { label: "Sonic", glyph: "SN", className: "chain-sonic" },
+        unichain: { label: "Unichain", glyph: "U", className: "chain-unichain" },
+        worldchain: { label: "World Chain", glyph: "W", className: "chain-worldchain" },
+        unknown: { label: "Unknown", glyph: "?", className: "chain-unknown" },
+      };
+
+      const COINGECKO_ID_BY_SYMBOL = {
+        ETH: "ethereum",
+        USDC: "usd-coin",
+        USDT: "tether",
+        cbBTC: "coinbase-wrapped-btc",
+        REI: "rei-network",
+        SDT: "stake-dao",
+        WAVE: "waves",
+      };
+
+      function getTokenChains(token, chains) {
+        const normalized = Array.isArray(chains)
+          ? chains.map((chain) => String(chain || "").trim().toLowerCase()).filter(Boolean)
+          : [];
+        if (normalized.length > 0) return normalized;
+        return TOKEN_CHAIN_HINTS[token] || ["unknown"];
+      }
+
+      function renderChainBadges(token, chains) {
+        const chainsToRender = getTokenChains(token, chains);
+        return `<div class="chain-badges">${chainsToRender
+          .map((chain) => {
+            const meta = CHAIN_META[chain] || CHAIN_META.unknown;
+            return `<span class="chain-badge ${meta.className}" title="${meta.label}">${meta.glyph}</span>`;
+          })
+          .join("")}</div>`;
+      }
+
+      async function fetchMarketCapByToken(tokenRows) {
+        const symbols = Array.from(new Set(tokenRows.map((row) => row.token)));
+        const ids = Array.from(
+          new Set(
+            symbols
+              .map((symbol) => COINGECKO_ID_BY_SYMBOL[symbol])
+              .filter(Boolean),
+          ),
+        );
+        if (!ids.length) return new Map();
+
+        const params = new URLSearchParams({
+          ids: ids.join(","),
+          vs_currencies: "usd",
+          include_market_cap: "true",
+        });
+        const response = await fetch(`https://api.coingecko.com/api/v3/simple/price?${params.toString()}`);
+        if (!response.ok) return new Map();
+
+        const payload = await response.json();
+        const marketCapById = new Map(
+          Object.entries(payload || {}).map(([id, row]) => [id, Number(row.usd_market_cap || 0)]),
+        );
+        const out = new Map();
+        for (const symbol of symbols) {
+          const id = COINGECKO_ID_BY_SYMBOL[symbol];
+          if (id && marketCapById.has(id)) {
+            out.set(symbol, marketCapById.get(id));
+          }
+        }
+        return out;
+      }
+
+      function summarize(data) {
+        const entities = data.entities || [];
+        const totalUsd = entities.reduce((sum, entity) => sum + Number(entity.total_usd || 0), 0);
+        const totalTokens = entities.reduce(
+          (sum, entity) => sum + (Array.isArray(entity.holdings) ? entity.holdings.length : 0),
+          0,
+        );
+
+        return {
+          entityCount: entities.length,
+          totalUsd,
+          avgUsd: entities.length ? totalUsd / entities.length : 0,
+          totalTokens,
+        };
+      }
+
+      function groupTokens(data) {
+        const byToken = new Map();
+        for (const entity of data.entities || []) {
+          for (const holding of entity.holdings || []) {
+            const key = `${holding.token}__${holding.chain || "unknown"}`;
+            const entry = byToken.get(key) || {
+              token: holding.token,
+              chains: new Set(),
+              total_usd: 0,
+              holders: [],
+            };
+            entry.chains.add(String(holding.chain || "unknown").trim().toLowerCase() || "unknown");
+            entry.total_usd += Number(holding.value_usd || 0);
+            entry.holders.push({
+              entity_name: entity.entity_name,
+              value_usd: Number(holding.value_usd || 0),
+            });
+            byToken.set(key, entry);
+          }
+        }
+
+        return Array.from(byToken.values())
+          .map((entry) => ({
+            ...entry,
+            chains: Array.from(entry.chains),
+            holders: entry.holders.sort((a, b) => b.value_usd - a.value_usd),
+          }))
+          .sort((a, b) => b.total_usd - a.total_usd);
+      }
+
+      async function render() {
+        const data = JSON.parse(document.getElementById("snapshot-data").textContent);
+        const summary = summarize(data);
+        const tokens = groupTokens(data);
+        const marketCaps = await fetchMarketCapByToken(tokens);
+
+        document.getElementById("meta").textContent =
+          `Generated ${data.generated_at} • Min holding ${fmtUsd(data.min_holding_usd)} • ${summary.entityCount} entities`;
+
+        document.getElementById("summary-cards").innerHTML = [
+          ["Entities", summary.entityCount],
+          ["Total Held", fmtUsd(summary.totalUsd)],
+          ["Avg / Entity", fmtUsd(summary.avgUsd)],
+          ["Tracked Holdings", summary.totalTokens],
+        ]
+          .map(
+            ([label, value]) => `
+              <article class="card">
+                <div class="k">${label}</div>
+                <div class="v">${value}</div>
+              </article>
+            `,
+          )
+          .join("");
+
+        document.getElementById("entity-body").innerHTML = (data.entities || [])
+          .map(
+            (entity) => `
+              <tr>
+                <td>${entity.entity_name}</td>
+                <td class="num">${(entity.holdings || []).length}</td>
+                <td class="num">${fmtUsd(entity.total_usd)}</td>
+              </tr>
+            `,
+          )
+          .join("");
+
+        document.getElementById("token-body").innerHTML = tokens
+          .map((token, index) => {
+            const marketCap = Number(marketCaps.get(token.token) || 0);
+            const watchlistPct = summary.totalUsd > 0 ? (token.total_usd / summary.totalUsd) * 100 : 0;
+            const holderNames = token.holders
+              .map((holder) => `${holder.entity_name} (${fmtUsd(holder.value_usd)})`)
+              .join(", ");
+
+            return `
+              <tr>
+                <td>${index + 1}</td>
+                <td class="token-name">${token.token}</td>
+                <td>${renderChainBadges(token.token, token.chains)}</td>
+                <td class="num">${fmtMarketCap(marketCap)}</td>
+                <td class="num">${token.holders.length}</td>
+                <td class="num ${watchlistPct >= 10 ? "good" : ""}">${watchlistPct.toFixed(2)}%</td>
+                <td class="num">${fmtUsd(token.total_usd)}</td>
+                <td class="entity-list">${holderNames}</td>
+              </tr>
+            `;
+          })
+          .join("");
+      }
+
+      render().catch((error) => {
+        document.getElementById("meta").textContent = `Render failed: ${error.message}`;
+      });
+    </script>
+  </body>
+</html>

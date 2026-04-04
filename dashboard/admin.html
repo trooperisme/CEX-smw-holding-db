@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Portfolio Tracker Dashboard</title>
+    <link rel="stylesheet" href="/dashboard/admin.css" />
+  </head>
+  <body>
+    <main class="layout">
+      <header class="hero">
+        <h1>Top Holdings Tracker</h1>
+        <button id="run-scan" class="primary">Run Full Scan</button>
+      </header>
+
+      <section class="card">
+        <div class="section-header">
+          <h2>Scan Control Panel</h2>
+          <span id="scan-status" class="pill">Idle</span>
+        </div>
+        <p id="last-scan">No scan yet</p>
+        <pre id="logs" class="logs"></pre>
+      </section>
+
+      <section class="card">
+        <div class="section-header">
+          <h2>Cluster View</h2>
+          <div class="filters">
+            <input id="cluster-search" type="search" placeholder="Search token..." />
+            <select id="snapshot-select"></select>
+          </div>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Token</th>
+              <th>Ticker</th>
+              <th>Holdings</th>
+              <th># Holders</th>
+              <th>Holder Breakdown</th>
+            </tr>
+          </thead>
+          <tbody id="cluster-body"></tbody>
+        </table>
+      </section>
+
+      <section class="card">
+        <div class="section-header">
+          <h2>Per-Wallet View</h2>
+          <div class="filters">
+            <select id="wallet-select"></select>
+          </div>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>Token</th>
+              <th>Chain</th>
+              <th>Balance</th>
+              <th>Value USD</th>
+            </tr>
+          </thead>
+          <tbody id="wallet-body"></tbody>
+        </table>
+        <p id="wallet-extra"></p>
+      </section>
+
+      <section class="card">
+        <div class="section-header">
+          <h2>Comparison View</h2>
+          <div class="filters">
+            <select id="compare-a"></select>
+            <select id="compare-b"></select>
+            <button id="load-diff">Compare</button>
+          </div>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>Type</th>
+              <th>Token</th>
+              <th>Chain</th>
+              <th>Old Value</th>
+              <th>New Value</th>
+              <th>Change</th>
+            </tr>
+          </thead>
+          <tbody id="diff-body"></tbody>
+        </table>
+      </section>
+    </main>
+    <script src="/dashboard/main.js" defer></script>
+  </body>
+</html>

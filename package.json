@@ -1,0 +1,34 @@
+{
+  "name": "smw-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/src/server.js",
+    "scan": "ts-node src/index.ts",
+    "dashboard": "ts-node src/server.ts",
+    "test": "node --test -r ts-node/register src/*.test.ts",
+    "scan:headless": "HEADLESS=true ts-node src/index.ts",
+    "sync:sheet": "ts-node src/sync-runner.ts",
+    "jobs:run": "ts-node src/job-runner.ts",
+    "scrape:direct": "ts-node src/direct-scrape.ts",
+    "dashboard:export": "ts-node src/export-dashboard.ts",
+    "claude-long:run": "ts-node src/claude-long.ts",
+    "claude-long:test": "node --test -r ts-node/register src/claude-long.test.ts"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.99.2",
+    "better-sqlite3": "^11.8.1",
+    "dotenv": "^16.6.1",
+    "express": "^4.21.2",
+    "googleapis": "^153.0.0",
+    "playwright": "^1.52.0"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/express": "^5.0.3",
+    "@types/node": "^24.3.0",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.2"
+  }
+}
