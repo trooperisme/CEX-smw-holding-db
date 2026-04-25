@@ -20,3 +20,4 @@ data/wallet-scraper/*
 !data/wallet-scraper/raw/
 data/wallet-scraper/raw/*
 !data/wallet-scraper/raw/trader-hypurrscan.csv
+.vercel

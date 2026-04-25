@@ -8,6 +8,7 @@ import { runFullScan } from "./index";
 import { runQueuedScrapeJobs } from "./job-worker";
 import { resolveWorkspaceFilePath, resolveWorkspacePaths } from "./runtime-paths";
 import { runSignalRefresh } from "./signal-refresh";
+import { createSignalStorage } from "./signal-storage";
 import { createStorage } from "./storage";
 import { runSheetSyncToSupabase } from "./sync";
 import { loadTrackedTraders } from "./trader-registry";
@@ -62,6 +63,7 @@ const AUTH_SECRET =
   process.env.SIGNALS_APP_COOKIE_SECRET ||
   process.env.APP_PASSWORD ||
   "local-signals-secret";
+const RUN_SYNCHRONOUSLY = Boolean(process.env.VERCEL);
 
 function parseCookies(cookieHeader: string | undefined): Record<string, string> {
   if (!cookieHeader) return {};
@@ -257,8 +259,8 @@ app.get("/api/jobs/status", (_req, res) => {
   });
 });
 
-app.post("/api/signals/refresh", (_req, res) => {
-  if (runtime.signalsRunning) {
+app.post("/api/signals/refresh", async (_req, res) => {
+  if (!RUN_SYNCHRONOUSLY && runtime.signalsRunning) {
     res.status(409).json({
       error: "Signals refresh already running",
       snapshotId: runtime.signalsCurrentSnapshotId,
@@ -266,14 +268,14 @@ app.post("/api/signals/refresh", (_req, res) => {
     return;
   }
 
-  const storage = createStorage(cwd);
+  const storage = createSignalStorage(cwd);
   let traders = [] as ReturnType<typeof loadTrackedTraders>;
   let snapshotId = 0;
 
   try {
     traders = loadTrackedTraders(cwd).filter((trader) => trader.isActive);
-    storage.replaceTrackedTraders(traders);
-    snapshotId = storage.createSignalSnapshot(traders.length);
+    await storage.replaceTrackedTraders(traders);
+    snapshotId = await storage.createSignalSnapshot(traders.length);
   } catch (error) {
     storage.close();
     res.status(500).json({ ok: false, error: (error as Error)?.message || String(error) });
@@ -294,7 +296,7 @@ app.post("/api/signals/refresh", (_req, res) => {
     console.log(formatted);
   };
 
-  void runSignalRefresh({ cwd, logger, snapshotId, traders })
+  const refreshPromise = runSignalRefresh({ cwd, logger, snapshotId, traders })
     .then((result) => {
       runtime.signalsLastResult = result;
     })
@@ -306,19 +308,36 @@ app.post("/api/signals/refresh", (_req, res) => {
       runtime.signalsRunning = false;
     });
 
+  if (RUN_SYNCHRONOUSLY) {
+    await refreshPromise;
+    if (runtime.signalsLastError) {
+      res.status(500).json({ ok: false, error: runtime.signalsLastError, snapshotId });
+      return;
+    }
+    res.json({
+      ok: true,
+      started: true,
+      completed: true,
+      snapshotId,
+      tradersTotal: traders.length,
+      result: runtime.signalsLastResult,
+    });
+    return;
+  }
+
   res.json({ ok: true, started: true, snapshotId, tradersTotal: traders.length });
 });
 
-app.get("/api/signals/refresh/:snapshotId/status", (req, res) => {
+app.get("/api/signals/refresh/:snapshotId/status", async (req, res) => {
   const snapshotId = Number(req.params.snapshotId);
   if (!Number.isFinite(snapshotId)) {
     res.status(400).json({ error: "Invalid snapshotId" });
     return;
   }
 
-  const storage = createStorage(cwd);
+  const storage = createSignalStorage(cwd);
   try {
-    const snapshot = storage.getSignalSnapshot(snapshotId);
+    const snapshot = await storage.getSignalSnapshot(snapshotId);
     if (!snapshot) {
       res.status(404).json({ error: "Signal snapshot not found" });
       return;
@@ -326,9 +345,14 @@ app.get("/api/signals/refresh/:snapshotId/status", (req, res) => {
 
     res.json({
       snapshot,
-      runs: storage.getSignalTraderRuns(snapshotId),
+      runs: await storage.getSignalTraderRuns(snapshotId),
       runtime: {
         running: runtime.signalsRunning && runtime.signalsCurrentSnapshotId === snapshotId,
+        snapshotRunning: snapshot.status === "running",
+        canContinue:
+          RUN_SYNCHRONOUSLY &&
+          snapshot.status === "running" &&
+          !(runtime.signalsRunning && runtime.signalsCurrentSnapshotId === snapshotId),
         logs:
           runtime.signalsCurrentSnapshotId === snapshotId
             ? runtime.signalsLogs.slice(-500)
@@ -342,36 +366,77 @@ app.get("/api/signals/refresh/:snapshotId/status", (req, res) => {
   }
 });
 
-app.get("/api/signals/snapshots", (_req, res) => {
-  const storage = createStorage(cwd);
+app.post("/api/signals/refresh/:snapshotId/continue", async (req, res) => {
+  const snapshotId = Number(req.params.snapshotId);
+  if (!Number.isFinite(snapshotId)) {
+    res.status(400).json({ error: "Invalid snapshotId" });
+    return;
+  }
+
+  if (!RUN_SYNCHRONOUSLY && runtime.signalsRunning) {
+    res.status(409).json({
+      error: "Signals refresh already running",
+      snapshotId: runtime.signalsCurrentSnapshotId,
+    });
+    return;
+  }
+
+  runtime.signalsRunning = true;
+  runtime.signalsLastError = null;
+  runtime.signalsLastResult = null;
+  runtime.signalsCurrentSnapshotId = snapshotId;
+
+  const logger = (line: string) => {
+    const formatted = `${new Date().toISOString()} ${line}`;
+    runtime.signalsLogs.push(formatted);
+    if (runtime.signalsLogs.length > 2000) runtime.signalsLogs.shift();
+    console.log(formatted);
+  };
+
   try {
-    res.json({ snapshots: storage.getSignalSnapshots() });
+    const result = await runSignalRefresh({ cwd, logger, snapshotId });
+    runtime.signalsLastResult = result;
+    res.json({ ok: true, continued: true, snapshotId, result });
+  } catch (error) {
+    const message = (error as Error)?.message || String(error);
+    runtime.signalsLastError = message;
+    logger(`Signals continuation error: ${message}`);
+    res.status(500).json({ ok: false, error: message, snapshotId });
+  } finally {
+    runtime.signalsRunning = false;
+  }
+});
+
+app.get("/api/signals/snapshots", async (_req, res) => {
+  const storage = createSignalStorage(cwd);
+  try {
+    res.json({ snapshots: await storage.getSignalSnapshots() });
   } finally {
     storage.close();
   }
 });
 
-app.get("/api/signals/latest", (req, res) => {
+app.get("/api/signals/latest", async (req, res) => {
   const market = parseMarketType(req.query.market);
-  const storage = createStorage(cwd);
+  const storage = createSignalStorage(cwd);
   try {
-    const snapshotId = storage.getLatestSignalSnapshotId();
+    const snapshotId = await storage.getLatestSignalSnapshotId();
     if (!snapshotId) {
       res.json({ snapshot: null, market, rows: [] });
       return;
     }
 
     res.json({
-      snapshot: storage.getSignalSnapshot(snapshotId),
+      snapshot: await storage.getSignalSnapshot(snapshotId),
       market,
-      rows: storage.getTokenSignalMetrics(snapshotId, market),
+      rows: await storage.getTokenSignalMetrics(snapshotId, market),
     });
   } finally {
     storage.close();
   }
 });
 
-app.get("/api/signals/:snapshotId", (req, res) => {
+app.get("/api/signals/:snapshotId", async (req, res) => {
   const snapshotId = Number(req.params.snapshotId);
   const market = parseMarketType(req.query.market);
   if (!Number.isFinite(snapshotId)) {
@@ -379,9 +444,9 @@ app.get("/api/signals/:snapshotId", (req, res) => {
     return;
   }
 
-  const storage = createStorage(cwd);
+  const storage = createSignalStorage(cwd);
   try {
-    const snapshot = storage.getSignalSnapshot(snapshotId);
+    const snapshot = await storage.getSignalSnapshot(snapshotId);
     if (!snapshot) {
       res.status(404).json({ error: "Signal snapshot not found" });
       return;
@@ -390,14 +455,14 @@ app.get("/api/signals/:snapshotId", (req, res) => {
     res.json({
       snapshot,
       market,
-      rows: storage.getTokenSignalMetrics(snapshotId, market),
+      rows: await storage.getTokenSignalMetrics(snapshotId, market),
     });
   } finally {
     storage.close();
   }
 });
 
-app.get("/api/signals/:snapshotId/token/:token", (req, res) => {
+app.get("/api/signals/:snapshotId/token/:token", async (req, res) => {
   const snapshotId = Number(req.params.snapshotId);
   const token = decodeURIComponent(req.params.token);
   if (!Number.isFinite(snapshotId)) {
@@ -405,23 +470,24 @@ app.get("/api/signals/:snapshotId/token/:token", (req, res) => {
     return;
   }
 
-  const storage = createStorage(cwd);
+  const storage = createSignalStorage(cwd);
   try {
-    const snapshot = storage.getSignalSnapshot(snapshotId);
+    const snapshot = await storage.getSignalSnapshot(snapshotId);
     if (!snapshot) {
       res.status(404).json({ error: "Signal snapshot not found" });
       return;
     }
 
-    const metric = storage
-      .getTokenSignalMetrics(snapshotId, "crypto")
-      .concat(storage.getTokenSignalMetrics(snapshotId, "tradfi"))
+    const cryptoMetrics = await storage.getTokenSignalMetrics(snapshotId, "crypto");
+    const tradfiMetrics = await storage.getTokenSignalMetrics(snapshotId, "tradfi");
+    const metric = cryptoMetrics
+      .concat(tradfiMetrics)
       .find((row) => row.token === token);
 
     res.json({
       snapshot,
       metric: metric || null,
-      ...storage.getTokenDrilldown(snapshotId, token),
+      ...(await storage.getTokenDrilldown(snapshotId, token)),
     });
   } finally {
     storage.close();
@@ -476,7 +542,7 @@ app.post("/api/admin/run-scrape-jobs", async (req, res) => {
   }
 });
 
-app.post("/api/scan", (_req, res) => {
+app.post("/api/scan", async (_req, res) => {
   if (runtime.running) {
     res.status(409).json({ error: "Scan already running" });
     return;
@@ -494,7 +560,7 @@ app.post("/api/scan", (_req, res) => {
     console.log(formatted);
   };
 
-  void runFullScan({ cwd, logger })
+  const scanPromise = runFullScan({ cwd, logger })
     .then((result) => {
       runtime.lastSnapshotId = result.snapshotId;
     })
@@ -505,6 +571,16 @@ app.post("/api/scan", (_req, res) => {
     .finally(() => {
       runtime.running = false;
     });
+
+  if (RUN_SYNCHRONOUSLY) {
+    await scanPromise;
+    if (runtime.lastError) {
+      res.status(500).json({ ok: false, error: runtime.lastError });
+      return;
+    }
+    res.json({ started: true, completed: true, snapshotId: runtime.lastSnapshotId });
+    return;
+  }
 
   res.json({ started: true });
 });
@@ -590,8 +666,17 @@ app.get("/api/diff", (req, res) => {
   }
 });
 
-const port = Number(process.env.PORT || 3000);
-const host = process.env.HOST || "0.0.0.0";
-app.listen(port, host, () => {
-  console.log(`Dashboard running at http://${host}:${port}`);
-});
+export function startServer(): void {
+  const port = Number(process.env.PORT || 3000);
+  const host = process.env.HOST || "0.0.0.0";
+  app.listen(port, host, () => {
+    console.log(`Dashboard running at http://${host}:${port}`);
+  });
+}
+
+if (require.main === module) {
+  startServer();
+}
+
+export { app };
+export default app;

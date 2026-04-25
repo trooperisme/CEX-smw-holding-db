@@ -336,6 +336,9 @@ async function loadInitialData() {
   const latest = await loadSnapshots();
   updateSummary(latest);
   await loadSnapshotRows();
+  if (latest?.status === "running" && state.selectedSnapshotId) {
+    void pollRefresh(state.selectedSnapshotId);
+  }
 }
 
 async function ensureDrilldown(token) {
@@ -357,7 +360,15 @@ async function pollRefresh(snapshotId) {
     updateSummary(payload.snapshot || null);
 
     const runtime = payload.runtime || {};
-    if (runtime.running) {
+    if (runtime.canContinue) {
+      setBanner("Refresh running. Continuing the next trader batch...", "warning");
+      await fetchJson(`/api/signals/refresh/${snapshotId}/continue`, { method: "POST" });
+      await loadSnapshots(snapshotId);
+      await loadSnapshotRows();
+      continue;
+    }
+
+    if (runtime.running || payload.snapshot?.status === "running") {
       const runs = Array.isArray(payload.runs) ? payload.runs : [];
       const failed = runs.filter((run) => run.status === "failed");
       if (failed.length) {

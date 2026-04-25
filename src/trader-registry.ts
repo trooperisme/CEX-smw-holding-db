@@ -51,20 +51,27 @@ function shouldImportSource(repoFile: string, importSource: string): boolean {
   return sourceStat.mtimeMs >= repoStat.mtimeMs;
 }
 
+function bundledTraderSignalsCsv(cwd: string): string {
+  return path.join(cwd, "data", "wallet-scraper", "raw", "trader-hypurrscan.csv");
+}
+
 export function syncTraderSignalsCsv(cwd: string): string {
   const paths = resolveWorkspacePaths(cwd);
   const repoFile = paths.traderSignalsCsvFile;
   const importSource = process.env.TRADER_SIGNALS_IMPORT_CSV || DEFAULT_IMPORT_SOURCE;
+  const bundledSource = bundledTraderSignalsCsv(cwd);
 
   ensureDirExists(path.dirname(repoFile));
 
   if (shouldImportSource(repoFile, importSource)) {
     fs.copyFileSync(importSource, repoFile);
+  } else if (!fs.existsSync(repoFile) && fs.existsSync(bundledSource)) {
+    fs.copyFileSync(bundledSource, repoFile);
   }
 
   if (!fs.existsSync(repoFile)) {
     throw new Error(
-      `Trader CSV not found. Expected ${repoFile}${importSource ? ` or import source ${importSource}` : ""}`,
+      `Trader CSV not found. Expected ${repoFile}, bundled source ${bundledSource}${importSource ? `, or import source ${importSource}` : ""}`,
     );
   }
 

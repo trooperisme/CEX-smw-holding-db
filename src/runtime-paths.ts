@@ -65,6 +65,10 @@ function resolveDataRoot(cwd: string): { appDataDir: string; dataMode: DataMode 
     return { appDataDir: configuredDataDir, dataMode };
   }
 
+  if (process.env.VERCEL) {
+    return { appDataDir: path.join("/tmp", APP_SLUG), dataMode: "structured" };
+  }
+
   // Production-safe default: if a mounted data volume exists, keep app data there.
   const hostedDataRoot = process.env.HOSTED_DATA_ROOT?.trim() || "/data";
   const runningHosted = Boolean(process.env.RAILWAY_ENVIRONMENT || process.env.RENDER || process.env.NODE_ENV === "production");
