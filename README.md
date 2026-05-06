@@ -35,7 +35,7 @@ cp .env.example .env
 Optional:
 - Configure `GOOGLE_SHEETS_API_KEY` + `SPREADSHEET_ID` to load wallets from Google Sheets.
 - Configure `SHEET_NAME`/`SHEET_GID` for the tracked entity tab (default is `Database` / `919437919`).
-- Configure `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` to enable manual sheet-to-Supabase sync.
+- Configure `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY` to enable Supabase-backed storage for signals and manual sheet-to-Supabase sync.
 - By default browser automation prefers an existing Chrome CDP session at `http://127.0.0.1:9222` (`PREFER_CDP_BROWSER=true`).
 - If Sheets is not configured, edit the local wallets file. The app will read the legacy root `wallets.json` when present, otherwise it will use `data/wallet-scraper/raw/wallets.json`.
 - Optional runtime path env vars:
@@ -44,6 +44,54 @@ Optional:
   - `DATA_DIR`
   - `EXPORTS_DIR`
   - `RUNS_DIR`
+
+## Railway Variables
+
+For the deployed dashboard on Railway, only a small subset is actually required:
+
+- Required for Hypurrscan signal refresh:
+  - `FIRECRAWL_API_KEY`
+- Recommended for a public Railway deployment:
+  - `APP_PASSWORD`
+  - `APP_COOKIE_SECRET`
+- Required only if you want sheet-backed wallet loading or manual sync:
+  - `GOOGLE_SHEETS_API_KEY`
+  - `SPREADSHEET_ID`
+  - `SHEET_NAME`
+  - `SHEET_GID`
+  - `SUPABASE_URL`
+  - `SUPABASE_SERVICE_ROLE_KEY`
+- Recommended if you want persistent app data on Railway:
+  - mount a volume at `/data`
+  - `DATA_DIR=/data/wallet-scraper`
+  - `HOSTED_DATA_ROOT=/data`
+
+Usually not appropriate on Railway unless you know you need them:
+
+- Local browser / Cloudflare flow:
+  - `HEADLESS`
+  - `BROWSER_CDP_URL`
+  - `PREFER_CDP_BROWSER`
+  - `CF_MANUAL_TIMEOUT_SECONDS`
+  - `SCREENSHOTS_ENABLED`
+- Scan tuning:
+  - `MIN_HOLDING_USD`
+  - `DELAY_BETWEEN_WALLETS_MS`
+  - `INCLUDE_DEFI`
+  - `SCRAPE_JOB_LIMIT`
+  - `MAX_SINGLE_HOLDING_USD`
+  - `SIGNALS_REFRESH_CONCURRENCY`
+  - `SIGNALS_REFRESH_BATCH_SIZE`
+  - `CLAUDE_LONG_INITIAL_LOOKBACK_DAYS`
+  - `CLAUDE_LONG_WALLET`
+- Local import / path overrides:
+  - `TRADER_SIGNALS_IMPORT_CSV`
+  - `BROWSER_PROFILE_DIR`
+  - `SCREENSHOTS_DIR`
+  - `EXPORTS_DIR`
+  - `RUNS_DIR`
+
+Railway will provide `PORT` automatically. `HOST=0.0.0.0` is safe but not usually necessary.
 
 ## Run
 
@@ -95,6 +143,38 @@ GET  /api/sync/status
 POST /api/admin/run-scrape-jobs
 GET  /api/jobs/status
 ```
+
+## Attach Supabase
+
+This repo already supports Supabase. The switch is runtime-based:
+
+- If `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are both set, signal snapshots and tracked traders use Supabase.
+- If those vars are missing, the app falls back to local SQLite under `data/`.
+
+That means Supabase is the clean fix for Railway persistence. Once attached, deploys no longer wipe signal dashboard history.
+
+Apply the SQL migrations to your Supabase project in this order:
+
+```sql
+supabase/migrations/20260319_000001_initial_wallet_intelligence_schema.sql
+supabase/migrations/20260319_000002_service_role_grants.sql
+supabase/migrations/20260420_000001_signal_dashboard_schema.sql
+supabase/migrations/20260506_000001_entities_updated_at_trigger.sql
+```
+
+Then set these Railway variables on the deployed service:
+
+```bash
+SUPABASE_URL=...
+SUPABASE_SERVICE_ROLE_KEY=...
+```
+
+Notes:
+- Use the Supabase project URL, not the Studio URL.
+- Use the `service_role` key, not the anon key, because the server writes snapshots, trader runs, and positions.
+- `FIRECRAWL_API_KEY` is still required for live Hypurrscan refreshes.
+
+After the vars are set, restart or redeploy the Railway service. New refresh runs will write into Supabase automatically.
 
 ## Key Paths
 

@@ -8,6 +8,7 @@ const els = {
   summaryStatus: document.getElementById("summary-status"),
   summaryTraders: document.getElementById("summary-traders"),
   summaryPositions: document.getElementById("summary-positions"),
+  summaryZeroPositions: document.getElementById("summary-zero-positions"),
   tableTitle: document.getElementById("table-title"),
   tableSubtitle: document.getElementById("table-subtitle"),
   tableStatus: document.getElementById("table-status"),
@@ -26,6 +27,8 @@ const state = {
   refreshRunning: false,
   sortKey: "smwFlows",
   sortDir: "desc",
+  runSummary: null,
+  coverageSummary: null,
 };
 
 function escapeHtml(value) {
@@ -59,6 +62,13 @@ function fmtDate(value) {
   });
 }
 
+function shortWallet(value) {
+  const normalized = String(value || "").trim();
+  if (!normalized) return "";
+  if (normalized.length <= 12) return normalized;
+  return `${normalized.slice(0, 6)}...${normalized.slice(-4)}`;
+}
+
 async function fetchJson(url, options) {
   const response = await fetch(url, options);
   if (response.status === 401) {
@@ -83,7 +93,23 @@ function setBanner(message, tone = "warning") {
   els.statusBanner.dataset.tone = tone;
 }
 
-function updateSummary(snapshot) {
+function buildCoverageBanner(coverageSummary) {
+  const missingTrackedCount = Number(coverageSummary?.missingTrackedCount || 0);
+  if (missingTrackedCount <= 0) return null;
+
+  const missingPreview = Array.isArray(coverageSummary?.missingTrackedTraders)
+    ? coverageSummary.missingTrackedTraders
+        .slice(0, 3)
+        .map((trader) => `${trader.traderName} (${shortWallet(trader.walletAddress)})`)
+        .join(", ")
+    : "";
+  const suffix =
+    missingTrackedCount > 3 ? `, plus ${missingTrackedCount - 3} more` : "";
+
+  return `Snapshot is missing ${missingTrackedCount} tracked trader${missingTrackedCount === 1 ? "" : "s"} from the current CSV: ${missingPreview}${suffix}. Run refresh to include them.`;
+}
+
+function updateSummary(snapshot, runSummary = null) {
   const status = snapshot?.status || "idle";
   els.summaryStatus.textContent = status.toUpperCase();
   els.summaryStatus.className = "pill";
@@ -93,6 +119,7 @@ function updateSummary(snapshot) {
 
   els.summaryTraders.textContent = `${Number(snapshot?.traders_completed || 0)}/${Number(snapshot?.total_traders || 0)} traders`;
   els.summaryPositions.textContent = `${Number(snapshot?.total_positions || 0)} positions`;
+  els.summaryZeroPositions.textContent = `${Number(runSummary?.zeroPositionCount || 0)} zero-position traders`;
 
   if (!snapshot) {
     els.heroMeta.textContent = "No signal snapshot yet. Trigger a manual refresh to gather positions.";
@@ -201,7 +228,7 @@ function buildDrilldownCell(token) {
           .map(
             (row) => `
               <div class="drilldown-item">
-                <span>${escapeHtml(row.traderName)}</span>
+                <span>${escapeHtml(row.traderName)} <span class="token-sub">${escapeHtml(shortWallet(row.walletAddress))}</span></span>
                 <span>${escapeHtml(fmtUsd(row.valueUsd))}</span>
               </div>
             `,
@@ -228,7 +255,11 @@ function buildDrilldownCell(token) {
 function renderTable() {
   const rows = Array.isArray(state.rows) ? getSortedRows(state.rows) : [];
   els.tableTitle.textContent = state.market === "crypto" ? "Crypto" : "TradFi";
-  els.tableSubtitle.textContent = `Snapshot #${state.selectedSnapshotId || "—"} token-level signals sorted by ${describeSort()}.`;
+  const tradersWithPositionsCount = Number(state.runSummary?.tradersWithPositionsCount || 0);
+  const zeroPositionCount = Number(state.runSummary?.zeroPositionCount || 0);
+  els.tableSubtitle.textContent =
+    `Snapshot #${state.selectedSnapshotId || "—"} token-level signals sorted by ${describeSort()}. ` +
+    `${tradersWithPositionsCount} traders currently contribute rows; ${zeroPositionCount} scraped successfully with 0 open perps.`;
   els.tableStatus.textContent = `${rows.length} rows`;
   updateSortButtons();
 
@@ -327,8 +358,27 @@ async function loadSnapshotRows() {
 
   const payload = await fetchJson(`/api/signals/${state.selectedSnapshotId}?market=${state.market}`);
   state.rows = Array.isArray(payload.rows) ? payload.rows : [];
+  state.runSummary = payload.runSummary || null;
+  state.coverageSummary = payload.coverageSummary || null;
   state.openToken = null;
-  updateSummary(payload.snapshot || null);
+  updateSummary(payload.snapshot || null, state.runSummary);
+  if (!state.refreshRunning) {
+    const coverageBanner = buildCoverageBanner(state.coverageSummary);
+    const zeroPositionCount = Number(state.runSummary?.zeroPositionCount || 0);
+    const failedCount = Number(state.runSummary?.failedCount || 0);
+    if (coverageBanner) {
+      setBanner(coverageBanner, "warning");
+    } else if (failedCount > 0) {
+      setBanner(`${failedCount} trader scrapes failed in this snapshot.`, "warning");
+    } else if (zeroPositionCount > 0) {
+      setBanner(
+        `${zeroPositionCount} tracked traders had 0 open perps in this snapshot, so they do not appear in the token table.`,
+        "info",
+      );
+    } else {
+      setBanner("", "info");
+    }
+  }
   renderTable();
 }
 
@@ -357,7 +407,7 @@ async function pollRefresh(snapshotId) {
 
   while (state.refreshPollId === snapshotId) {
     const payload = await fetchJson(`/api/signals/refresh/${snapshotId}/status`);
-    updateSummary(payload.snapshot || null);
+    updateSummary(payload.snapshot || null, state.runSummary);
 
     const runtime = payload.runtime || {};
     if (runtime.canContinue) {

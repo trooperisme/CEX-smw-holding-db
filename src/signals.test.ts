@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
+import { buildSignalSnapshotCoverageSummary } from "./signal-coverage";
 import { parseHypurrscanMarkdown } from "./hypurrscan-signals";
 import { aggregateTokenSignalMetrics } from "./signals";
 import { classifySignalMarketType, loadTrackedTraders } from "./trader-registry";
@@ -121,4 +122,49 @@ test("loadTrackedTraders imports the CSV and preserves distinct addresses", () =
   } finally {
     process.env.TRADER_SIGNALS_IMPORT_CSV = previousSource;
   }
+});
+
+test("buildSignalSnapshotCoverageSummary flags tracked traders missing from a snapshot", () => {
+  const coverage = buildSignalSnapshotCoverageSummary(
+    [
+      {
+        traderName: "tommy 🌙",
+        hypurrscanUrl: "https://hypurrscan.io/address/0xe635dfc74904e3ec71b95fd3b8b2a7dc5a9870a6#perps",
+        walletAddress: "0xe635dfc74904e3ec71b95fd3b8b2a7dc5a9870a6",
+        isActive: true,
+      },
+      {
+        traderName: "tommy 🌙",
+        hypurrscanUrl: "https://hypurrscan.io/address/0x83b1385d8126ecf64bfb3b4254d67eb9db753bcc#perps",
+        walletAddress: "0x83b1385d8126ecf64bfb3b4254d67eb9db753bcc",
+        isActive: true,
+      },
+    ],
+    [
+      {
+        snapshotId: 44,
+        traderName: "tommy 🌙",
+        walletAddress: "0xe635dfc74904e3ec71b95fd3b8b2a7dc5a9870a6",
+        sourceUrl: "https://hypurrscan.io/address/0xe635dfc74904e3ec71b95fd3b8b2a7dc5a9870a6#perps",
+        status: "success",
+        positionsFound: 1,
+        errorMessage: null,
+        startedAt: "2026-05-06T00:00:00.000Z",
+        finishedAt: "2026-05-06T00:00:01.000Z",
+      },
+    ],
+  );
+
+  assert.deepEqual(coverage, {
+    trackedTotal: 2,
+    coveredCount: 1,
+    missingTrackedCount: 1,
+    missingTrackedTraders: [
+      {
+        traderName: "tommy 🌙",
+        walletAddress: "0x83b1385d8126ecf64bfb3b4254d67eb9db753bcc",
+        sourceUrl: "https://hypurrscan.io/address/0x83b1385d8126ecf64bfb3b4254d67eb9db753bcc#perps",
+      },
+    ],
+  });
 });

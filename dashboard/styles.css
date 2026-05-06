@@ -278,6 +278,12 @@ input:focus {
   color: var(--accent);
 }
 
+.status-banner[data-tone="info"] {
+  border-color: rgba(146, 168, 255, 0.26);
+  background: rgba(146, 168, 255, 0.08);
+  color: #c8d4ff;
+}
+
 .status-banner[data-tone="danger"] {
   border-color: rgba(255, 138, 138, 0.26);
   background: rgba(255, 138, 138, 0.08);

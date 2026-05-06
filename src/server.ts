@@ -7,6 +7,7 @@ import { buildClusters, diffClusters } from "./aggregator";
 import { runFullScan } from "./index";
 import { runQueuedScrapeJobs } from "./job-worker";
 import { resolveWorkspaceFilePath, resolveWorkspacePaths } from "./runtime-paths";
+import { buildSignalSnapshotCoverageSummary } from "./signal-coverage";
 import { runSignalRefresh } from "./signal-refresh";
 import { createSignalStorage } from "./signal-storage";
 import { createStorage } from "./storage";
@@ -148,6 +149,33 @@ function requireSignalsAuth(req: express.Request, res: express.Response, next: e
 
 function parseMarketType(input: unknown): SignalMarketType {
   return String(input || "").toLowerCase() === "tradfi" ? "tradfi" : "crypto";
+}
+
+async function buildSignalRunSummary(storage: ReturnType<typeof createSignalStorage>, snapshotId: number) {
+  const runs = await storage.getSignalTraderRuns(snapshotId);
+  const failedCount = runs.filter((run) => run.status === "failed").length;
+  const zeroPositionCount = runs.filter(
+    (run) => run.status === "success" && Number(run.positionsFound || 0) === 0,
+  ).length;
+  const tradersWithPositionsCount = runs.filter(
+    (run) => run.status === "success" && Number(run.positionsFound || 0) > 0,
+  ).length;
+
+  return {
+    totalRuns: runs.length,
+    failedCount,
+    zeroPositionCount,
+    tradersWithPositionsCount,
+  };
+}
+
+async function buildSignalCoverageSummary(
+  storage: ReturnType<typeof createSignalStorage>,
+  snapshotId: number,
+) {
+  const trackedTraders = loadTrackedTraders(cwd).filter((trader) => trader.isActive);
+  const runs = await storage.getSignalTraderRuns(snapshotId);
+  return buildSignalSnapshotCoverageSummary(trackedTraders, runs);
 }
 
 app.use(express.json());
@@ -430,6 +458,8 @@ app.get("/api/signals/latest", async (req, res) => {
       snapshot: await storage.getSignalSnapshot(snapshotId),
       market,
       rows: await storage.getTokenSignalMetrics(snapshotId, market),
+      runSummary: await buildSignalRunSummary(storage, snapshotId),
+      coverageSummary: await buildSignalCoverageSummary(storage, snapshotId),
     });
   } finally {
     storage.close();
@@ -456,6 +486,8 @@ app.get("/api/signals/:snapshotId", async (req, res) => {
       snapshot,
       market,
       rows: await storage.getTokenSignalMetrics(snapshotId, market),
+      runSummary: await buildSignalRunSummary(storage, snapshotId),
+      coverageSummary: await buildSignalCoverageSummary(storage, snapshotId),
     });
   } finally {
     storage.close();

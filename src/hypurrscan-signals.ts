@@ -9,6 +9,15 @@ type ScrapeHypurrscanOptions = {
   snapshotId: number;
 };
 
+function parsePositiveInt(value: string | undefined, fallback: number): number {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : fallback;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 function cleanMarkdownCell(input: string): string {
   return String(input || "")
     .replace(/!\[[^\]]*]\([^)]*\)/g, "")
@@ -68,6 +77,16 @@ function parsePerpsTable(markdown: string): Array<{
   return positions;
 }
 
+function looksLikeEmptyHypurrscanMarkdown(markdown: string): boolean {
+  const normalized = String(markdown || "");
+  return (
+    normalized.includes("No positions found") ||
+    normalized.includes("| No data available |") ||
+    normalized.includes("Perps  : 0.00$") ||
+    normalized.includes("Overview\n\n0.00$")
+  );
+}
+
 async function runFirecrawlScrape(url: string, outputPath: string): Promise<void> {
   const apiKey = process.env.FIRECRAWL_API_KEY?.trim();
   if (!apiKey) {
@@ -122,10 +141,27 @@ export async function scrapeHypurrscanSignals(
   const scrapeDir = path.join(paths.processedDataDir, "signal-scrapes", `snapshot-${options.snapshotId}`);
   ensureDirExists(scrapeDir);
   const outputPath = path.join(scrapeDir, `${trader.walletAddress}.md`);
+  const retryCount = parsePositiveInt(process.env.HYPURRSCAN_EMPTY_RETRY_COUNT, 2);
+  const retryDelayMs = parsePositiveInt(process.env.HYPURRSCAN_EMPTY_RETRY_DELAY_MS, 1200);
 
-  await runFirecrawlScrape(trader.hypurrscanUrl, outputPath);
-  const markdown = fs.readFileSync(outputPath, "utf-8");
-  const positions = parsePerpsTable(markdown);
+  let markdown = "";
+  let positions: Array<{
+    token: string;
+    side: TraderPositionSide;
+    valueUsd: number;
+  }> = [];
+
+  for (let attempt = 0; attempt <= retryCount; attempt += 1) {
+    await runFirecrawlScrape(trader.hypurrscanUrl, outputPath);
+    markdown = fs.readFileSync(outputPath, "utf-8");
+    positions = parsePerpsTable(markdown);
+
+    if (positions.length > 0 || !looksLikeEmptyHypurrscanMarkdown(markdown) || attempt === retryCount) {
+      break;
+    }
+
+    await sleep(retryDelayMs);
+  }
 
   return positions.map((position) => ({
     traderName: trader.traderName,

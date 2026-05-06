@@ -1,15 +1,5 @@
 create extension if not exists pgcrypto;
 
-create or replace function public.set_updated_at()
-returns trigger
-language plpgsql
-as $$
-begin
-  new.updated_at = timezone('utc', now());
-  return new;
-end;
-$$;
-
 create table if not exists public.entities (
   id uuid primary key default gen_random_uuid(),
   entity_id text not null unique,
@@ -158,10 +148,3 @@ select *
 from public.entities
 where is_active = true
   and priority_color = 'red';
-
-drop trigger if exists trg_entities_updated_at on public.entities;
-
-create trigger trg_entities_updated_at
-before update on public.entities
-for each row
-execute function public.set_updated_at();
