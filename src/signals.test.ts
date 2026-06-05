@@ -4,7 +4,7 @@ import path from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { buildSignalSnapshotCoverageSummary } from "./signal-coverage";
-import { parseHypurrscanMarkdown } from "./hypurrscan-signals";
+import { parseHypurrscanMarkdown, scrapeHypurrscanSignals } from "./hypurrscan-signals";
 import { aggregateTokenSignalMetrics } from "./signals";
 import { classifySignalMarketType, loadTrackedTraders } from "./trader-registry";
 
@@ -29,6 +29,75 @@ test("parseHypurrscanMarkdown extracts open perp positions", () => {
     { token: "xyz:CL", side: "long", valueUsd: 576852.72 },
     { token: "XRP", side: "short", valueUsd: 77108.48 },
   ]);
+});
+
+test("scrapeHypurrscanSignals retries transient Firecrawl retrieval failures", async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "signals-firecrawl-retry-"));
+  const previousRetryDelay = process.env.HYPURRSCAN_RETRY_DELAY_MS;
+  const previousRetryCount = process.env.HYPURRSCAN_SCRAPE_RETRY_COUNT;
+  process.env.HYPURRSCAN_RETRY_DELAY_MS = "0";
+  process.env.HYPURRSCAN_SCRAPE_RETRY_COUNT = "1";
+
+  let calls = 0;
+  const markdown = `
+| Token | Side | Lev. | Value | Amount | Entry | BE | Price | PnL | Funding | Liq. |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| [![](https://hypurrscan.io/perps/HYPE.svg)HYPE](https://hypurrscan.io/market/HYPE) | **LONG** | 3X (cross) | **12,345.67$** | 10 | 1$ | 1$ | 1$ | 0$ | 0$ | - |
+`;
+
+  try {
+    const positions = await scrapeHypurrscanSignals(
+      {
+        traderName: "Retry Trader",
+        hypurrscanUrl: "https://hypurrscan.io/address/0x1111111111111111111111111111111111111111#perps",
+        walletAddress: "0x1111111111111111111111111111111111111111",
+        isActive: true,
+      },
+      {
+        cwd: tmpDir,
+        snapshotId: 7,
+        scrapeRunner: async (_url, outputPath) => {
+          calls += 1;
+          if (calls === 1) {
+            throw new Error('Firecrawl scrape failed (500): {"code":"SCRAPE_ALL_ENGINES_FAILED"}');
+          }
+          fs.writeFileSync(outputPath, markdown, "utf-8");
+        },
+      },
+    );
+
+    assert.equal(calls, 2);
+    assert.deepEqual(positions.map((position) => ({
+      traderName: position.traderName,
+      walletAddress: position.walletAddress,
+      token: position.token,
+      side: position.side,
+      valueUsd: position.valueUsd,
+      marketType: position.marketType,
+      parseStatus: position.parseStatus,
+    })), [
+      {
+        traderName: "Retry Trader",
+        walletAddress: "0x1111111111111111111111111111111111111111",
+        token: "HYPE",
+        side: "long",
+        valueUsd: 12345.67,
+        marketType: "crypto",
+        parseStatus: "parsed",
+      },
+    ]);
+  } finally {
+    if (previousRetryDelay === undefined) {
+      delete process.env.HYPURRSCAN_RETRY_DELAY_MS;
+    } else {
+      process.env.HYPURRSCAN_RETRY_DELAY_MS = previousRetryDelay;
+    }
+    if (previousRetryCount === undefined) {
+      delete process.env.HYPURRSCAN_SCRAPE_RETRY_COUNT;
+    } else {
+      process.env.HYPURRSCAN_SCRAPE_RETRY_COUNT = previousRetryCount;
+    }
+  }
 });
 
 test("aggregateTokenSignalMetrics computes token-level signal rows", () => {

@@ -7,7 +7,10 @@ import { classifySignalMarketType } from "./trader-registry";
 type ScrapeHypurrscanOptions = {
   cwd: string;
   snapshotId: number;
+  scrapeRunner?: FirecrawlScrapeRunner;
 };
+
+type FirecrawlScrapeRunner = (url: string, outputPath: string) => Promise<void>;
 
 function parsePositiveInt(value: string | undefined, fallback: number): number {
   const parsed = Number(value);
@@ -87,6 +90,16 @@ function looksLikeEmptyHypurrscanMarkdown(markdown: string): boolean {
   );
 }
 
+function isRetriableScrapeError(error: unknown): boolean {
+  const message = String((error as Error)?.message || error || "");
+  return (
+    /Firecrawl scrape failed \((?:408|409|425|429|5\d\d)\)/i.test(message) ||
+    /SCRAPE_ALL_ENGINES_FAILED/i.test(message) ||
+    /Firecrawl returned empty markdown/i.test(message) ||
+    /fetch failed|network|timeout|temporarily unavailable|ECONNRESET|ETIMEDOUT|EAI_AGAIN/i.test(message)
+  );
+}
+
 async function runFirecrawlScrape(url: string, outputPath: string): Promise<void> {
   const apiKey = process.env.FIRECRAWL_API_KEY?.trim();
   if (!apiKey) {
@@ -141,8 +154,10 @@ export async function scrapeHypurrscanSignals(
   const scrapeDir = path.join(paths.processedDataDir, "signal-scrapes", `snapshot-${options.snapshotId}`);
   ensureDirExists(scrapeDir);
   const outputPath = path.join(scrapeDir, `${trader.walletAddress}.md`);
-  const retryCount = parsePositiveInt(process.env.HYPURRSCAN_EMPTY_RETRY_COUNT, 2);
-  const retryDelayMs = parsePositiveInt(process.env.HYPURRSCAN_EMPTY_RETRY_DELAY_MS, 1200);
+  const emptyRetryCount = parsePositiveInt(process.env.HYPURRSCAN_EMPTY_RETRY_COUNT, 2);
+  const scrapeRetryCount = parsePositiveInt(process.env.HYPURRSCAN_SCRAPE_RETRY_COUNT, 4);
+  const retryDelayMs = parsePositiveInt(process.env.HYPURRSCAN_RETRY_DELAY_MS, 1500);
+  const scrapeRunner = options.scrapeRunner || runFirecrawlScrape;
 
   let markdown = "";
   let positions: Array<{
@@ -150,17 +165,29 @@ export async function scrapeHypurrscanSignals(
     side: TraderPositionSide;
     valueUsd: number;
   }> = [];
+  let scrapeFailures = 0;
+  let emptyResponses = 0;
 
-  for (let attempt = 0; attempt <= retryCount; attempt += 1) {
-    await runFirecrawlScrape(trader.hypurrscanUrl, outputPath);
-    markdown = fs.readFileSync(outputPath, "utf-8");
-    positions = parsePerpsTable(markdown);
+  for (;;) {
+    try {
+      await scrapeRunner(trader.hypurrscanUrl, outputPath);
+      markdown = fs.readFileSync(outputPath, "utf-8");
+      positions = parsePerpsTable(markdown);
+    } catch (error) {
+      if (scrapeFailures >= scrapeRetryCount || !isRetriableScrapeError(error)) {
+        throw error;
+      }
+      scrapeFailures += 1;
+      await sleep(retryDelayMs * scrapeFailures);
+      continue;
+    }
 
-    if (positions.length > 0 || !looksLikeEmptyHypurrscanMarkdown(markdown) || attempt === retryCount) {
+    if (positions.length > 0 || !looksLikeEmptyHypurrscanMarkdown(markdown) || emptyResponses >= emptyRetryCount) {
       break;
     }
 
-    await sleep(retryDelayMs);
+    emptyResponses += 1;
+    await sleep(retryDelayMs * emptyResponses);
   }
 
   return positions.map((position) => ({
