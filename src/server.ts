@@ -8,6 +8,7 @@ import { runFullScan } from "./index";
 import { runQueuedScrapeJobs } from "./job-worker";
 import { resolveWorkspaceFilePath, resolveWorkspacePaths } from "./runtime-paths";
 import { buildSignalSnapshotCoverageSummary } from "./signal-coverage";
+import { buildSignalMarkdownExport } from "./signal-export";
 import { runSignalRefresh } from "./signal-refresh";
 import { createSignalStorage } from "./signal-storage";
 import { createStorage } from "./storage";
@@ -488,6 +489,37 @@ app.get("/api/signals/:snapshotId", async (req, res) => {
       rows: await storage.getTokenSignalMetrics(snapshotId, market),
       runSummary: await buildSignalRunSummary(storage, snapshotId),
       coverageSummary: await buildSignalCoverageSummary(storage, snapshotId),
+    });
+  } finally {
+    storage.close();
+  }
+});
+
+app.get("/api/signals/:snapshotId/export", async (req, res) => {
+  const snapshotId = Number(req.params.snapshotId);
+  const market = parseMarketType(req.query.market);
+  if (!Number.isFinite(snapshotId)) {
+    res.status(400).json({ error: "Invalid snapshotId" });
+    return;
+  }
+
+  const storage = createSignalStorage(cwd);
+  try {
+    const snapshot = await storage.getSignalSnapshot(snapshotId);
+    if (!snapshot) {
+      res.status(404).json({ error: "Signal snapshot not found" });
+      return;
+    }
+
+    const metrics = await storage.getTokenSignalMetrics(snapshotId, market);
+    const positions = await storage.getTraderPositions(snapshotId);
+    const runs = await storage.getSignalTraderRuns(snapshotId);
+
+    res.json({
+      snapshotId,
+      market,
+      format: "markdown",
+      text: buildSignalMarkdownExport({ snapshot, market, metrics, positions, runs }),
     });
   } finally {
     storage.close();

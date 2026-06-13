@@ -2,6 +2,7 @@ const els = {
   heroMeta: document.getElementById("hero-meta"),
   refreshButton: document.getElementById("refresh-button"),
   logoutButton: document.getElementById("logout-button"),
+  copyButton: document.getElementById("copy-button"),
   snapshotSelect: document.getElementById("snapshot-select"),
   marketTabs: Array.from(document.querySelectorAll("[data-market]")),
   sortButtons: Array.from(document.querySelectorAll("[data-sort-key]")),
@@ -29,6 +30,7 @@ const state = {
   sortDir: "desc",
   runSummary: null,
   coverageSummary: null,
+  copyRunning: false,
 };
 
 function escapeHtml(value) {
@@ -136,6 +138,12 @@ function updateSummary(snapshot, runSummary = null) {
           ? snapshot.error_message || "Refresh failed"
           : "Ready";
   els.heroMeta.textContent = `${fmtDate(timestamp)} · ${suffix}`;
+}
+
+function updateCopyButton() {
+  if (!els.copyButton) return;
+  els.copyButton.disabled = !state.selectedSnapshotId || state.copyRunning;
+  els.copyButton.textContent = state.copyRunning ? "Copying..." : "Copy";
 }
 
 function renderSnapshotOptions() {
@@ -333,6 +341,7 @@ async function loadSnapshots(preferredSnapshotId) {
   if (!state.snapshots.length) {
     state.selectedSnapshotId = null;
     renderSnapshotOptions();
+    updateCopyButton();
     return null;
   }
 
@@ -345,6 +354,7 @@ async function loadSnapshots(preferredSnapshotId) {
     ? Number(nextId)
     : Number(state.snapshots[0].id);
   renderSnapshotOptions();
+  updateCopyButton();
   return state.snapshots.find((snapshot) => snapshot.id === state.selectedSnapshotId) || null;
 }
 
@@ -353,6 +363,7 @@ async function loadSnapshotRows() {
     state.rows = [];
     updateSummary(null);
     renderTable();
+    updateCopyButton();
     return;
   }
 
@@ -380,6 +391,42 @@ async function loadSnapshotRows() {
     }
   }
   renderTable();
+  updateCopyButton();
+}
+
+async function copyTextToClipboard(text) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(text);
+    return;
+  }
+
+  const textarea = document.createElement("textarea");
+  textarea.value = text;
+  textarea.setAttribute("readonly", "");
+  textarea.style.position = "fixed";
+  textarea.style.left = "-9999px";
+  document.body.appendChild(textarea);
+  textarea.select();
+  document.execCommand("copy");
+  textarea.remove();
+}
+
+async function copySignalExport() {
+  if (!state.selectedSnapshotId || state.copyRunning) return;
+  state.copyRunning = true;
+  updateCopyButton();
+  try {
+    const payload = await fetchJson(
+      `/api/signals/${state.selectedSnapshotId}/export?market=${encodeURIComponent(state.market)}`,
+    );
+    await copyTextToClipboard(String(payload.text || ""));
+    setBanner(`Copied ${state.market} snapshot #${state.selectedSnapshotId} data.`, "success");
+  } catch (error) {
+    setBanner((error && error.message) || String(error), "danger");
+  } finally {
+    state.copyRunning = false;
+    updateCopyButton();
+  }
 }
 
 async function loadInitialData() {
@@ -465,9 +512,14 @@ els.logoutButton.addEventListener("click", async () => {
   window.location.href = "/login";
 });
 
+els.copyButton.addEventListener("click", () => {
+  void copySignalExport();
+});
+
 els.snapshotSelect.addEventListener("change", async (event) => {
   state.selectedSnapshotId = Number(event.target.value || 0) || null;
   state.drilldowns.clear();
+  updateCopyButton();
   await loadSnapshotRows();
 });
 

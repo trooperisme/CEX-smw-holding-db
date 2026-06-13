@@ -4,6 +4,7 @@ import path from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { buildSignalSnapshotCoverageSummary } from "./signal-coverage";
+import { buildSignalMarkdownExport } from "./signal-export";
 import { parseHypurrscanMarkdown, scrapeHypurrscanSignals } from "./hypurrscan-signals";
 import { aggregateTokenSignalMetrics } from "./signals";
 import { classifySignalMarketType, loadTrackedTraders } from "./trader-registry";
@@ -161,6 +162,130 @@ test("aggregateTokenSignalMetrics computes token-level signal rows", () => {
       shortValueUsd: 44805990.24,
     },
   ]);
+});
+
+test("buildSignalMarkdownExport formats current-market GPT copy payload", () => {
+  const text = buildSignalMarkdownExport({
+    snapshot: {
+      id: 46,
+      status: "success",
+      total_traders: 3,
+      traders_completed: 3,
+      traders_failed: 0,
+      total_positions: 4,
+      error_message: null,
+      created_at: "2026-06-13T07:49:00.000Z",
+      finished_at: "2026-06-13T07:50:00.000Z",
+    },
+    market: "crypto",
+    metrics: [
+      {
+        snapshotId: 46,
+        marketType: "crypto",
+        token: "BTC",
+        smwFlows: -1,
+        holdingsUsd: 1200,
+        longSmw: 1,
+        shortSmw: 2,
+        longValueUsd: 500,
+        shortValueUsd: 1700,
+      },
+      {
+        snapshotId: 46,
+        marketType: "tradfi",
+        token: "xyz:CL",
+        smwFlows: 1,
+        holdingsUsd: 900,
+        longSmw: 1,
+        shortSmw: 0,
+        longValueUsd: 900,
+        shortValueUsd: 0,
+      },
+    ],
+    positions: [
+      {
+        snapshotId: 46,
+        traderName: "Long Trader",
+        walletAddress: "0x1111111111111111111111111111111111111111",
+        sourceUrl: "https://hypurrscan.io/address/0x1111111111111111111111111111111111111111#perps",
+        token: "BTC",
+        side: "long",
+        valueUsd: 500,
+        marketType: "crypto",
+        scrapedAt: "2026-06-13T07:50:00.000Z",
+        parseStatus: "parsed",
+      },
+      {
+        snapshotId: 46,
+        traderName: "Short Trader",
+        walletAddress: "0x2222222222222222222222222222222222222222",
+        sourceUrl: "https://hypurrscan.io/address/0x2222222222222222222222222222222222222222#perps",
+        token: "BTC",
+        side: "short",
+        valueUsd: 1700,
+        marketType: "crypto",
+        scrapedAt: "2026-06-13T07:50:00.000Z",
+        parseStatus: "parsed",
+      },
+      {
+        snapshotId: 46,
+        traderName: "Oil Trader",
+        walletAddress: "0x3333333333333333333333333333333333333333",
+        sourceUrl: "https://hypurrscan.io/address/0x3333333333333333333333333333333333333333#perps",
+        token: "xyz:CL",
+        side: "long",
+        valueUsd: 900,
+        marketType: "tradfi",
+        scrapedAt: "2026-06-13T07:50:00.000Z",
+        parseStatus: "parsed",
+      },
+    ],
+    runs: [
+      {
+        snapshotId: 46,
+        traderName: "Long Trader",
+        walletAddress: "0x1111111111111111111111111111111111111111",
+        sourceUrl: "https://hypurrscan.io/address/0x1111111111111111111111111111111111111111#perps",
+        status: "success",
+        positionsFound: 1,
+        errorMessage: null,
+        startedAt: "2026-06-13T07:49:00.000Z",
+        finishedAt: "2026-06-13T07:50:00.000Z",
+      },
+      {
+        snapshotId: 46,
+        traderName: "Flat Trader",
+        walletAddress: "0x4444444444444444444444444444444444444444",
+        sourceUrl: "https://hypurrscan.io/address/0x4444444444444444444444444444444444444444#perps",
+        status: "success",
+        positionsFound: 0,
+        errorMessage: null,
+        startedAt: "2026-06-13T07:49:00.000Z",
+        finishedAt: "2026-06-13T07:50:00.000Z",
+      },
+      {
+        snapshotId: 46,
+        traderName: "Failed Trader",
+        walletAddress: "0x5555555555555555555555555555555555555555",
+        sourceUrl: "https://hypurrscan.io/address/0x5555555555555555555555555555555555555555#perps",
+        status: "failed",
+        positionsFound: 0,
+        errorMessage: "Timeout",
+        startedAt: "2026-06-13T07:49:00.000Z",
+        finishedAt: "2026-06-13T07:50:00.000Z",
+      },
+    ],
+  });
+
+  assert.match(text, /Snapshot: #46/);
+  assert.match(text, /Market: crypto/);
+  assert.match(text, /\| BTC \| \$1,200\.00 \| -1 \| 1 \| 2 \| \$500\.00 \| \$1,700\.00 \|/);
+  assert.match(text, /Long:\n- Long Trader \(0x1111\.\.\.1111\): \$500\.00/);
+  assert.match(text, /Short:\n- Short Trader \(0x2222\.\.\.2222\): \$1,700\.00/);
+  assert.match(text, /1 successful trader scrapes had 0 open perps/);
+  assert.match(text, /1 trader scrapes failed/);
+  assert.doesNotMatch(text, /xyz:CL/);
+  assert.doesNotMatch(text, /Oil Trader/);
 });
 
 test("loadTrackedTraders imports the CSV and preserves distinct addresses", () => {
