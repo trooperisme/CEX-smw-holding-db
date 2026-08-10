@@ -2,11 +2,13 @@ node_modules/
 dist/
 .env
 .DS_Store
+.firecrawl/
 browser-profile/
 browser-profile-retry-*/
 screenshots/
 runs/
 data/
+exports/
 output/playwright/
 tmp/
 *.log

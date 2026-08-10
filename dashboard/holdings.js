@@ -5,7 +5,8 @@ const els = {
   copyButton: document.getElementById("copy-button"),
   snapshotSelect: document.getElementById("snapshot-select"),
   marketTabs: Array.from(document.querySelectorAll("[data-market]")),
-  sortButtons: Array.from(document.querySelectorAll("[data-sort-key]")),
+  tableHead: document.getElementById("table-head"),
+  sortButtons: [],
   summaryStatus: document.getElementById("summary-status"),
   summaryTraders: document.getElementById("summary-traders"),
   summaryPositions: document.getElementById("summary-positions"),
@@ -30,8 +31,30 @@ const state = {
   sortDir: "desc",
   runSummary: null,
   coverageSummary: null,
+  spotSummary: null,
+  spotGeneratedAt: null,
   copyRunning: false,
 };
+
+const MAX_VISIBLE_SNAPSHOTS = 5;
+
+const perpsSortLabels = {
+  smwFlows: "SMW Flows",
+  holdingsUsd: "Holdings",
+  longSmw: "Long SMW",
+  shortSmw: "Short SMW",
+};
+
+const spotSortLabels = {
+  holdersCount: "SMW Holders",
+  totalValueUsd: "Total Value",
+  avgValueUsd: "Avg Holding",
+  topHolderValueUsd: "Top Holder",
+};
+
+function isSpotView() {
+  return state.market === "spot";
+}
 
 function escapeHtml(value) {
   return String(value ?? "")
@@ -140,9 +163,35 @@ function updateSummary(snapshot, runSummary = null) {
   els.heroMeta.textContent = `${fmtDate(timestamp)} · ${suffix}`;
 }
 
+function updateSpotSummary(payload) {
+  const summary = payload?.summary || {};
+  const generatedAt = payload?.generatedAt || null;
+  const rows = Array.isArray(payload?.rows) ? payload.rows : [];
+  const status = generatedAt ? "ready" : "missing";
+  const minUsd = Number(summary.minUsd || 11);
+
+  els.summaryStatus.textContent = status.toUpperCase();
+  els.summaryStatus.className = "pill";
+  els.summaryStatus.classList.add(generatedAt ? "is-success" : "is-warning");
+  els.summaryTraders.textContent = `${Number(summary.tradersScanned || 0)} traders`;
+  els.summaryPositions.textContent = `${Number(summary.keptHoldings || summary.relevantHoldings || 0)} spot holdings >= ${fmtUsd(minUsd)}`;
+  els.summaryZeroPositions.textContent = `${rows.length} non-stable tokens`;
+
+  els.heroMeta.textContent = generatedAt
+    ? `${fmtDate(generatedAt)} · Spot holdings ready`
+    : "No spot holdings export yet. Refresh Spot to generate the dataset.";
+}
+
 function updateCopyButton() {
+  if (els.refreshButton) {
+    els.refreshButton.textContent = state.refreshRunning
+      ? "Refreshing..."
+      : isSpotView()
+        ? "Refresh Spot"
+        : "Refresh Signals";
+  }
   if (!els.copyButton) return;
-  els.copyButton.disabled = !state.selectedSnapshotId || state.copyRunning;
+  els.copyButton.disabled = isSpotView() || !state.selectedSnapshotId || state.copyRunning;
   els.copyButton.textContent = state.copyRunning ? "Copying..." : "Copy";
 }
 
@@ -179,6 +228,12 @@ function compareNumbers(left, right, key) {
 }
 
 function getSortedRows(rows) {
+  const labels = isSpotView() ? spotSortLabels : perpsSortLabels;
+  if (!Object.prototype.hasOwnProperty.call(labels, state.sortKey)) {
+    state.sortKey = isSpotView() ? "holdersCount" : "smwFlows";
+    state.sortDir = "desc";
+  }
+
   const direction = state.sortDir === "asc" ? 1 : -1;
   return [...rows].sort((left, right) => {
     const primary = compareNumbers(left, right, state.sortKey);
@@ -195,17 +250,13 @@ function getSortedRows(rows) {
 }
 
 function describeSort() {
-  const labels = {
-    smwFlows: "SMW Flows",
-    holdingsUsd: "Holdings",
-    longSmw: "Long SMW",
-    shortSmw: "Short SMW",
-  };
+  const labels = isSpotView() ? spotSortLabels : perpsSortLabels;
   const direction = state.sortDir === "asc" ? "ascending" : "descending";
   return `${labels[state.sortKey]} ${direction}`;
 }
 
 function updateSortButtons() {
+  els.sortButtons = Array.from(document.querySelectorAll("[data-sort-key]"));
   for (const button of els.sortButtons) {
     const isActive = button.dataset.sortKey === state.sortKey;
     button.classList.toggle("is-active", isActive);
@@ -218,6 +269,70 @@ function updateSortButtons() {
     if (!indicator) continue;
     indicator.textContent = isActive ? (state.sortDir === "asc" ? "↑" : "↓") : "-";
   }
+}
+
+function renderPerpsTableHead() {
+  els.tableHead.innerHTML = `
+    <tr>
+      <th>Token</th>
+      <th>
+        <button class="sort-button" type="button" data-sort-key="smwFlows">
+          <span>SMW Flows</span>
+          <span class="sort-indicator" aria-hidden="true">-</span>
+        </button>
+      </th>
+      <th>
+        <button class="sort-button" type="button" data-sort-key="holdingsUsd">
+          <span>Holdings</span>
+          <span class="sort-indicator" aria-hidden="true">-</span>
+        </button>
+      </th>
+      <th>
+        <button class="sort-button" type="button" data-sort-key="longSmw">
+          <span>Long SMW</span>
+          <span class="sort-indicator" aria-hidden="true">-</span>
+        </button>
+      </th>
+      <th>
+        <button class="sort-button" type="button" data-sort-key="shortSmw">
+          <span>Short SMW</span>
+          <span class="sort-indicator" aria-hidden="true">-</span>
+        </button>
+      </th>
+    </tr>
+  `;
+}
+
+function renderSpotTableHead() {
+  els.tableHead.innerHTML = `
+    <tr>
+      <th>Token</th>
+      <th>
+        <button class="sort-button" type="button" data-sort-key="holdersCount">
+          <span>SMW Holders</span>
+          <span class="sort-indicator" aria-hidden="true">-</span>
+        </button>
+      </th>
+      <th>
+        <button class="sort-button" type="button" data-sort-key="totalValueUsd">
+          <span>Total Value</span>
+          <span class="sort-indicator" aria-hidden="true">-</span>
+        </button>
+      </th>
+      <th>
+        <button class="sort-button" type="button" data-sort-key="avgValueUsd">
+          <span>Avg Holding</span>
+          <span class="sort-indicator" aria-hidden="true">-</span>
+        </button>
+      </th>
+      <th>
+        <button class="sort-button" type="button" data-sort-key="topHolderValueUsd">
+          <span>Top Holder</span>
+          <span class="sort-indicator" aria-hidden="true">-</span>
+        </button>
+      </th>
+    </tr>
+  `;
 }
 
 function buildDrilldownCell(token) {
@@ -260,7 +375,45 @@ function buildDrilldownCell(token) {
   `;
 }
 
+function buildSpotDrilldownCell(row) {
+  const holders = Array.isArray(row?.holders) ? row.holders : [];
+  const items = holders.length
+    ? holders
+        .map(
+          (holder) => `
+            <div class="drilldown-item">
+              <span>
+                ${escapeHtml(holder.traderName)}
+                <span class="token-sub">${escapeHtml(shortWallet(holder.walletAddress))}</span>
+              </span>
+              <span>
+                <a class="drilldown-link" href="${escapeHtml(holder.spotUrl)}" target="_blank" rel="noreferrer">
+                  ${escapeHtml(fmtUsd(holder.valueUsd))}
+                </a>
+              </span>
+            </div>
+          `,
+        )
+        .join("")
+    : '<div class="empty-note">No holders after token filtering.</div>';
+
+  return `
+    <div class="drilldown-panel">
+      <div class="drilldown-card">
+        <h3>${escapeHtml(row?.token || "Token")} spot holders</h3>
+        <div class="drilldown-list">${items}</div>
+      </div>
+    </div>
+  `;
+}
+
 function renderTable() {
+  if (isSpotView()) {
+    renderSpotTable();
+    return;
+  }
+
+  renderPerpsTableHead();
   const rows = Array.isArray(state.rows) ? getSortedRows(state.rows) : [];
   els.tableTitle.textContent = state.market === "crypto" ? "Crypto" : "TradFi";
   const tradersWithPositionsCount = Number(state.runSummary?.tradersWithPositionsCount || 0);
@@ -335,9 +488,91 @@ function renderTable() {
     .join("");
 }
 
+function renderSpotTable() {
+  renderSpotTableHead();
+  const rows = Array.isArray(state.rows) ? getSortedRows(state.rows) : [];
+  const summary = state.spotSummary || {};
+  const filteredOut = summary.filteredOut || {};
+  const filteredCount =
+    Number(filteredOut.stable || 0) +
+    Number(filteredOut.trash || 0) +
+    Number(filteredOut.unrelated || 0);
+  const minUsd = Number(summary.minUsd || 11);
+
+  els.tableTitle.textContent = "Spot";
+  els.tableSubtitle.textContent =
+    `Non-stable spot holdings >= ${fmtUsd(minUsd)} sorted by ${describeSort()}. ` +
+    `${Number(summary.keptHoldings || summary.relevantHoldings || 0)} holdings kept; ${filteredCount} stable/trash/unrelated holdings filtered.`;
+  els.tableStatus.textContent = `${rows.length} rows`;
+  updateSortButtons();
+
+  if (!rows.length) {
+    els.tableBody.innerHTML = `
+      <tr>
+        <td colspan="5">
+          <div class="drilldown-panel">
+            <div class="empty-note">No non-stable spot holdings >= ${escapeHtml(fmtUsd(minUsd))} available. Refresh Spot to generate the dataset.</div>
+          </div>
+        </td>
+      </tr>
+    `;
+    return;
+  }
+
+  const maxHolders = maxMetric(rows, "holdersCount");
+  const maxTotal = maxMetric(rows, "totalValueUsd");
+  const maxAvg = maxMetric(rows, "avgValueUsd");
+  const maxTop = maxMetric(rows, "topHolderValueUsd");
+
+  els.tableBody.innerHTML = rows
+    .map((row) => {
+      const token = String(row.token || "");
+      const isOpen = state.openToken === token;
+      return `
+        <tr class="signal-row ${isOpen ? "is-open" : ""}" data-token="${escapeHtml(token)}">
+          <td>
+            <div class="token-cell">
+              <div class="token-badge">${escapeHtml(token.slice(0, 2).toUpperCase() || "?")}</div>
+              <div class="token-text">
+                <div class="token-name">${escapeHtml(token)}</div>
+                <div class="token-sub">Click to view spot holders</div>
+              </div>
+            </div>
+          </td>
+          <td>
+            <div class="metric-value" style="--fill:${(Number(row.holdersCount || 0) / maxHolders) * 100}%">
+              <span>${escapeHtml(String(row.holdersCount || 0))}</span>
+            </div>
+          </td>
+          <td>
+            <div class="metric-value" style="--fill:${(Number(row.totalValueUsd || 0) / maxTotal) * 100}%">
+              <span>${escapeHtml(fmtUsd(row.totalValueUsd))}</span>
+            </div>
+          </td>
+          <td>
+            <div class="metric-value" style="--fill:${(Number(row.avgValueUsd || 0) / maxAvg) * 100}%">
+              <span>${escapeHtml(fmtUsd(row.avgValueUsd))}</span>
+            </div>
+          </td>
+          <td>
+            <div class="metric-value" style="--fill:${(Number(row.topHolderValueUsd || 0) / maxTop) * 100}%">
+              <span>${escapeHtml(row.topHolderName || "-")} · ${escapeHtml(fmtUsd(row.topHolderValueUsd))}</span>
+            </div>
+          </td>
+        </tr>
+        ${
+          isOpen
+            ? `<tr class="drilldown-row"><td colspan="5">${buildSpotDrilldownCell(row)}</td></tr>`
+            : ""
+        }
+      `;
+    })
+    .join("");
+}
+
 async function loadSnapshots(preferredSnapshotId) {
   const payload = await fetchJson("/api/signals/snapshots");
-  state.snapshots = Array.isArray(payload.snapshots) ? payload.snapshots : [];
+  state.snapshots = Array.isArray(payload.snapshots) ? payload.snapshots.slice(0, MAX_VISIBLE_SNAPSHOTS) : [];
   if (!state.snapshots.length) {
     state.selectedSnapshotId = null;
     renderSnapshotOptions();
@@ -359,6 +594,28 @@ async function loadSnapshots(preferredSnapshotId) {
 }
 
 async function loadSnapshotRows() {
+  if (isSpotView()) {
+    const payload = await fetchJson("/api/spot-holdings");
+    state.rows = Array.isArray(payload.rows) ? payload.rows : [];
+    state.spotSummary = payload.summary || null;
+    state.spotGeneratedAt = payload.generatedAt || null;
+    state.openToken = null;
+    updateSpotSummary(payload);
+    if (payload.generatedAt) {
+      const filteredOut = payload.summary?.filteredOut || {};
+      const minUsd = Number(payload.summary?.minUsd || 11);
+      setBanner(
+        `Spot filter kept ${Number(payload.summary?.keptHoldings || payload.summary?.relevantHoldings || 0)} non-stable holdings >= ${fmtUsd(minUsd)}. Filtered out stable=${Number(filteredOut.stable || 0)}, trash=${Number(filteredOut.trash || 0)}, unrelated=${Number(filteredOut.unrelated || 0)}.`,
+        "info",
+      );
+    } else {
+      setBanner("No spot export found. Click Refresh Signals while Spot is selected to generate it.", "warning");
+    }
+    renderTable();
+    updateCopyButton();
+    return;
+  }
+
   if (!state.selectedSnapshotId) {
     state.rows = [];
     updateSummary(null);
@@ -450,6 +707,7 @@ async function ensureDrilldown(token) {
 async function pollRefresh(snapshotId) {
   state.refreshRunning = true;
   els.refreshButton.disabled = true;
+  updateCopyButton();
   state.refreshPollId = snapshotId;
 
   while (state.refreshPollId === snapshotId) {
@@ -489,20 +747,155 @@ async function pollRefresh(snapshotId) {
     state.refreshPollId = null;
     state.refreshRunning = false;
     els.refreshButton.disabled = false;
+    updateCopyButton();
     await loadSnapshots(snapshotId);
     await loadSnapshotRows();
     return;
   }
 }
 
+async function pollSpotRefresh() {
+  state.refreshRunning = true;
+  els.refreshButton.disabled = true;
+  updateCopyButton();
+
+  for (;;) {
+    const payload = await fetchJson("/api/spot-holdings/refresh/status");
+
+    if (payload.running) {
+      const logs = Array.isArray(payload.logs) ? payload.logs : [];
+      const latestLog = logs[logs.length - 1] || "Scanning Hypurrscan spot holdings...";
+      setBanner(latestLog, "warning");
+      await new Promise((resolve) => setTimeout(resolve, 2500));
+      continue;
+    }
+
+    state.refreshRunning = false;
+    els.refreshButton.disabled = false;
+    updateCopyButton();
+
+    if (payload.lastError) {
+      setBanner(payload.lastError, "danger");
+      await loadSnapshotRows();
+      return;
+    }
+
+    await loadSnapshotRows();
+    const result = payload.lastResult || {};
+    setBanner(
+      `Spot refresh complete. Scanned ${Number(result.tradersScanned || 0)} traders; ${Number(result.tradersWithFilteredHoldings || 0)} had non-stable holdings above threshold.`,
+      "success",
+    );
+    return;
+  }
+}
+
+async function pollCombinedRefresh(snapshotId) {
+  state.refreshRunning = true;
+  els.refreshButton.disabled = true;
+  updateCopyButton();
+  state.refreshPollId = snapshotId;
+
+  let latestSignalPayload = null;
+  let latestSpotPayload = null;
+
+  while (state.refreshPollId === snapshotId) {
+    const [signalPayload, spotPayload] = await Promise.all([
+      fetchJson(`/api/signals/refresh/${snapshotId}/status`),
+      fetchJson("/api/spot-holdings/refresh/status"),
+    ]);
+    latestSignalPayload = signalPayload;
+    latestSpotPayload = spotPayload;
+
+    updateSummary(signalPayload.snapshot || null, state.runSummary);
+
+    const runtime = signalPayload.runtime || {};
+    if (runtime.canContinue) {
+      setBanner("Refresh running. Continuing the next trader batch while Spot scan continues...", "warning");
+      await fetchJson(`/api/signals/refresh/${snapshotId}/continue`, { method: "POST" });
+      await loadSnapshots(snapshotId);
+      await loadSnapshotRows();
+      continue;
+    }
+
+    const signalsRunning = runtime.running || signalPayload.snapshot?.status === "running";
+    const spotRunning = Boolean(spotPayload.running);
+    if (signalsRunning || spotRunning) {
+      if (spotRunning) {
+        const logs = Array.isArray(spotPayload.logs) ? spotPayload.logs : [];
+        const latestLog = logs[logs.length - 1] || "Scanning Hypurrscan spot holdings...";
+        setBanner(`Refresh running. ${latestLog}`, "warning");
+      } else {
+        const runs = Array.isArray(signalPayload.runs) ? signalPayload.runs : [];
+        const failed = runs.filter((run) => run.status === "failed");
+        setBanner(
+          failed.length
+            ? `Refresh running. ${failed.length} trader scrapes have failed so far.`
+            : "Refresh running. Gathering trader positions from Hypurrscan...",
+          "warning",
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, 2500));
+      continue;
+    }
+
+    break;
+  }
+
+  state.refreshPollId = null;
+  state.refreshRunning = false;
+  els.refreshButton.disabled = false;
+  updateCopyButton();
+
+  await loadSnapshots(snapshotId);
+  await loadSnapshotRows();
+
+  const signalStatus = latestSignalPayload?.snapshot?.status;
+  if (latestSpotPayload?.lastError) {
+    setBanner(`Signals ${signalStatus || "finished"}; Spot refresh failed: ${latestSpotPayload.lastError}`, "warning");
+    return;
+  }
+
+  setBanner(
+    signalStatus === "partial"
+      ? "Refresh complete. Signals finished with partial failures; Spot holdings refreshed."
+      : signalStatus === "failed"
+        ? latestSignalPayload?.snapshot?.error_message || "Signal refresh failed; Spot holdings refreshed."
+        : "Refresh complete. Signals and Spot holdings are updated.",
+    signalStatus === "failed" ? "danger" : signalStatus === "partial" ? "warning" : "success",
+  );
+}
+
 els.refreshButton.addEventListener("click", async () => {
   try {
+    if (isSpotView()) {
+      setBanner("Starting Hypurrscan spot holdings refresh...", "warning");
+      state.refreshRunning = true;
+      els.refreshButton.disabled = true;
+      updateCopyButton();
+      await fetchJson("/api/spot-holdings/refresh", { method: "POST" });
+      void pollSpotRefresh().catch((error) => {
+        state.refreshRunning = false;
+        els.refreshButton.disabled = false;
+        updateCopyButton();
+        setBanner((error && error.message) || String(error), "danger");
+      });
+      return;
+    }
     setBanner("");
     const payload = await fetchJson("/api/signals/refresh", { method: "POST" });
     await loadSnapshots(payload.snapshotId);
     await loadSnapshotRows();
-    void pollRefresh(payload.snapshotId);
+    void pollCombinedRefresh(payload.snapshotId).catch((error) => {
+      state.refreshRunning = false;
+      els.refreshButton.disabled = false;
+      updateCopyButton();
+      setBanner((error && error.message) || String(error), "danger");
+    });
   } catch (error) {
+    state.refreshRunning = false;
+    els.refreshButton.disabled = false;
+    updateCopyButton();
     setBanner((error && error.message) || String(error), "danger");
   }
 });
@@ -523,23 +916,26 @@ els.snapshotSelect.addEventListener("change", async (event) => {
   await loadSnapshotRows();
 });
 
-for (const button of els.sortButtons) {
-  button.addEventListener("click", () => {
-    const nextKey = button.dataset.sortKey;
-    if (!nextKey) return;
-    if (state.sortKey === nextKey) {
-      state.sortDir = state.sortDir === "desc" ? "asc" : "desc";
-    } else {
-      state.sortKey = nextKey;
-      state.sortDir = "desc";
-    }
-    renderTable();
-  });
-}
+els.tableHead.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-sort-key]");
+  if (!button) return;
+  const nextKey = button.dataset.sortKey;
+  if (!nextKey) return;
+  if (state.sortKey === nextKey) {
+    state.sortDir = state.sortDir === "desc" ? "asc" : "desc";
+  } else {
+    state.sortKey = nextKey;
+    state.sortDir = "desc";
+  }
+  renderTable();
+});
 
 for (const button of els.marketTabs) {
   button.addEventListener("click", async () => {
-    state.market = button.dataset.market === "tradfi" ? "tradfi" : "crypto";
+    const nextMarket = button.dataset.market;
+    state.market = nextMarket === "tradfi" || nextMarket === "spot" ? nextMarket : "crypto";
+    state.sortKey = state.market === "spot" ? "holdersCount" : "smwFlows";
+    state.sortDir = "desc";
     state.drilldowns.clear();
     for (const candidate of els.marketTabs) {
       candidate.classList.toggle("is-active", candidate === button);
@@ -555,6 +951,7 @@ els.tableBody.addEventListener("click", async (event) => {
   if (!token) return;
   state.openToken = state.openToken === token ? null : token;
   renderTable();
+  if (isSpotView()) return;
   if (state.openToken === token) {
     await ensureDrilldown(token);
   }

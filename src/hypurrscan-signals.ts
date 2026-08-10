@@ -21,6 +21,38 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+function createTimeoutSignal(timeoutMs: number): AbortSignal | undefined {
+  if (timeoutMs <= 0) return undefined;
+  if (typeof AbortSignal !== "undefined" && typeof AbortSignal.timeout === "function") {
+    return AbortSignal.timeout(timeoutMs);
+  }
+
+  const controller = new AbortController();
+  setTimeout(() => controller.abort(), timeoutMs).unref?.();
+  return controller.signal;
+}
+
+let nextFirecrawlRequestAt = 0;
+let firecrawlThrottleTail = Promise.resolve();
+
+async function waitForFirecrawlSlot(): Promise<void> {
+  const minIntervalMs = parsePositiveInt(process.env.HYPURRSCAN_FIRECRAWL_MIN_INTERVAL_MS, 6500);
+  if (minIntervalMs <= 0) return;
+
+  const previousTail = firecrawlThrottleTail;
+  let releaseTail = () => {};
+  firecrawlThrottleTail = new Promise<void>((resolve) => {
+    releaseTail = resolve;
+  });
+
+  await previousTail;
+  const now = Date.now();
+  const waitMs = Math.max(0, nextFirecrawlRequestAt - now);
+  if (waitMs > 0) await sleep(waitMs);
+  nextFirecrawlRequestAt = Date.now() + minIntervalMs;
+  releaseTail();
+}
+
 function cleanMarkdownCell(input: string): string {
   return String(input || "")
     .replace(/!\[[^\]]*]\([^)]*\)/g, "")
@@ -100,12 +132,33 @@ function isRetriableScrapeError(error: unknown): boolean {
   );
 }
 
+function getRetryAfterMs(error: unknown): number | null {
+  const message = String((error as Error)?.message || error || "");
+  const retryAfterMatch = message.match(/retry after\s+(\d+)s/i);
+  if (retryAfterMatch) {
+    return (Number(retryAfterMatch[1]) + 2) * 1000;
+  }
+
+  const resetMatch = message.match(/resets at ([^"}]+)/i);
+  if (resetMatch) {
+    const resetAt = Date.parse(resetMatch[1]);
+    if (Number.isFinite(resetAt)) {
+      return Math.max(0, resetAt - Date.now() + 2000);
+    }
+  }
+
+  return null;
+}
+
 async function runFirecrawlScrape(url: string, outputPath: string): Promise<void> {
   const apiKey = process.env.FIRECRAWL_API_KEY?.trim();
   if (!apiKey) {
     throw new Error("FIRECRAWL_API_KEY is required for Hypurrscan scraping");
   }
 
+  await waitForFirecrawlSlot();
+
+  const timeoutMs = parsePositiveInt(process.env.HYPURRSCAN_FIRECRAWL_TIMEOUT_MS, 60000);
   const response = await fetch("https://api.firecrawl.dev/v2/scrape", {
     method: "POST",
     headers: {
@@ -121,6 +174,7 @@ async function runFirecrawlScrape(url: string, outputPath: string): Promise<void
       removeBase64Images: true,
       blockAds: true,
     }),
+    signal: createTimeoutSignal(timeoutMs),
   });
 
   if (!response.ok) {
@@ -155,7 +209,7 @@ export async function scrapeHypurrscanSignals(
   ensureDirExists(scrapeDir);
   const outputPath = path.join(scrapeDir, `${trader.walletAddress}.md`);
   const emptyRetryCount = parsePositiveInt(process.env.HYPURRSCAN_EMPTY_RETRY_COUNT, 2);
-  const scrapeRetryCount = parsePositiveInt(process.env.HYPURRSCAN_SCRAPE_RETRY_COUNT, 4);
+  const scrapeRetryCount = parsePositiveInt(process.env.HYPURRSCAN_SCRAPE_RETRY_COUNT, 6);
   const retryDelayMs = parsePositiveInt(process.env.HYPURRSCAN_RETRY_DELAY_MS, 1500);
   const scrapeRunner = options.scrapeRunner || runFirecrawlScrape;
 
@@ -178,7 +232,8 @@ export async function scrapeHypurrscanSignals(
         throw error;
       }
       scrapeFailures += 1;
-      await sleep(retryDelayMs * scrapeFailures);
+      const retryAfterMs = getRetryAfterMs(error);
+      await sleep(Math.max(retryDelayMs * scrapeFailures, retryAfterMs || 0));
       continue;
     }
 

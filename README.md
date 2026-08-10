@@ -52,6 +52,7 @@ For the deployed dashboard on Railway, only a small subset is actually required:
 - Required for Hypurrscan signal refresh:
   - `FIRECRAWL_API_KEY`
 - Recommended for a public Railway deployment:
+  - `APP_USERNAME` (defaults to `admin`)
   - `APP_PASSWORD`
   - `APP_COOKIE_SECRET`
 - Required only if you want sheet-backed wallet loading or manual sync:
@@ -110,7 +111,7 @@ npm run dashboard
 Open [http://localhost:3000/dashboard](http://localhost:3000/dashboard)
 
 New on-demand signals dashboard:
-- Set `APP_PASSWORD` in `.env` to enable the private login gate.
+- Set `APP_USERNAME` and `APP_PASSWORD` in `.env` to enable the private login gate. `APP_USERNAME` defaults to `admin`.
 - Keep the tracked trader CSV at `data/wallet-scraper/raw/trader-hypurrscan.csv`.
 - Optional: point `TRADER_SIGNALS_IMPORT_CSV` at your editable local CSV and the app will copy it into the repo-owned data path before refresh.
 - Open the app, log in, and use `Refresh Signals` to run a manual Hypurrscan scrape pass through Firecrawl.
@@ -173,6 +174,7 @@ Notes:
 - Use the Supabase project URL, not the Studio URL.
 - Use the `service_role` key, not the anon key, because the server writes snapshots, trader runs, and positions.
 - `FIRECRAWL_API_KEY` is still required for live Hypurrscan refreshes.
+- Spot holdings use Hypurrscan `#spot` pages. By default the Spot view keeps all non-stable/non-trash wallet-token holdings with value `>= $11`; set `SPOT_HOLDING_INCLUDE_TOKENS` only if you want to narrow the displayed token set.
 
 After the vars are set, restart or redeploy the Railway service. New refresh runs will write into Supabase automatically.
 
@@ -183,6 +185,8 @@ After the vars are set, restart or redeploy the Railway service. New refresh run
 - `src/storage.ts`: SQLite schema and DB operations
 - `src/signal-refresh.ts`: manual Hypurrscan signal refresh pipeline
 - `src/hypurrscan-signals.ts`: Firecrawl-backed Hypurrscan scrape + perps parser
+- `src/spot-holdings.ts`: Firecrawl-backed Hypurrscan `#spot` scrape + non-stable holdings export
+- `src/spot-token-filter.ts`: Spot token threshold/exclusion config
 - `src/trader-registry.ts`: CSV-backed tracked trader registry loader
 - `src/server.ts`: Express APIs + dashboard hosting
 - `src/sync.ts`: manual Google Sheets -> Supabase entity sync + scrape queue

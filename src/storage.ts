@@ -43,8 +43,50 @@ export type ClaudeLongRunRecord = {
   finishedAt: string | null;
 };
 
+function localFileExists(filePath: string): boolean {
+  try {
+    return fs.statSync(filePath).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function localDirExists(dirPath: string): boolean {
+  try {
+    return fs.statSync(dirPath).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function findLatestBundledSqliteSeed(cwd: string): string | null {
+  const exportsDir = path.join(cwd, "exports");
+  if (!localDirExists(exportsDir)) return null;
+
+  const candidates = fs
+    .readdirSync(exportsDir, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory() && entry.name.startsWith("database-export-"))
+    .map((entry) => path.join(exportsDir, entry.name, "sqlite", "portfolio.db"))
+    .filter((filePath) => localFileExists(filePath))
+    .sort((a, b) => b.localeCompare(a));
+
+  return candidates[0] || null;
+}
+
+function seedSqliteDatabaseIfAvailable(cwd: string, dbFile: string): void {
+  if (localFileExists(dbFile)) return;
+
+  const seedFile = findLatestBundledSqliteSeed(cwd);
+  if (!seedFile) return;
+
+  ensureDirExists(path.dirname(dbFile));
+  fs.copyFileSync(seedFile, dbFile);
+  console.warn(`Seeded SQLite database from bundled export: ${seedFile}`);
+}
+
 export function createStorage(cwd: string) {
   const paths = resolveWorkspacePaths(cwd);
+  seedSqliteDatabaseIfAvailable(cwd, paths.dbFile);
   ensureDirExists(path.dirname(paths.dbFile));
   const db = new Database(paths.dbFile);
 

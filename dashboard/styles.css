@@ -506,6 +506,15 @@ input:focus {
   font-variant-numeric: tabular-nums;
 }
 
+.drilldown-link {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.drilldown-link:hover {
+  text-decoration: underline;
+}
+
 .empty-note {
   color: var(--muted);
   font-size: 0.9rem;

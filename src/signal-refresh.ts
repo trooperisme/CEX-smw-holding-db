@@ -2,7 +2,7 @@ import { aggregateTokenSignalMetrics } from "./signals";
 import { createSignalStorage } from "./signal-storage";
 import { scrapeHypurrscanSignals } from "./hypurrscan-signals";
 import { loadTrackedTraders } from "./trader-registry";
-import { ScanLogger, SignalSnapshotStatus, TrackedTrader } from "./types";
+import { ScanLogger, SignalSnapshotStatus, SignalTraderRunRecord, TrackedTrader } from "./types";
 
 type RunSignalRefreshOptions = {
   cwd?: string;
@@ -10,6 +10,7 @@ type RunSignalRefreshOptions = {
   snapshotId?: number;
   traders?: TrackedTrader[];
   maxTraders?: number;
+  retryFailed?: boolean;
 };
 
 type RunSignalRefreshResult = {
@@ -22,10 +23,65 @@ type RunSignalRefreshResult = {
   status: SignalSnapshotStatus;
 };
 
+export type SignalRefreshProgress = {
+  pendingTraders: TrackedTrader[];
+  completed: number;
+  failed: number;
+  totalPositions: number;
+  interruptedRuns: number;
+  completedWallets: Set<string>;
+  failedWallets: Set<string>;
+};
+
 function parseNum(value: string | undefined, fallback: number): number {
   if (!value) return fallback;
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function normalizeWalletAddress(value: string): string {
+  return String(value || "").trim().toLowerCase();
+}
+
+export function summarizeSignalRefreshProgress(
+  traders: TrackedTrader[],
+  previousRuns: SignalTraderRunRecord[],
+  options: { retryFailed?: boolean } = {},
+): SignalRefreshProgress {
+  const latestRunByWallet = new Map<string, SignalTraderRunRecord>();
+  for (const run of previousRuns) {
+    latestRunByWallet.set(normalizeWalletAddress(run.walletAddress), run);
+  }
+
+  const completedWallets = new Set<string>();
+  const failedWallets = new Set<string>();
+  let totalPositions = 0;
+  for (const [walletAddress, run] of latestRunByWallet) {
+    if (run.status === "success") {
+      completedWallets.add(walletAddress);
+      totalPositions += Number(run.positionsFound || 0);
+    } else if (run.status === "failed") {
+      failedWallets.add(walletAddress);
+    }
+  }
+
+  const processedWallets = new Set([
+    ...completedWallets,
+    ...(options.retryFailed ? [] : failedWallets),
+  ]);
+  const pendingTraders = traders.filter(
+    (trader) => !processedWallets.has(normalizeWalletAddress(trader.walletAddress)),
+  );
+
+  return {
+    pendingTraders,
+    completed: completedWallets.size,
+    failed: failedWallets.size,
+    totalPositions,
+    interruptedRuns: previousRuns.filter((run) => run.status === "running").length,
+    completedWallets,
+    failedWallets,
+  };
 }
 
 export async function runSignalRefresh(
@@ -33,13 +89,14 @@ export async function runSignalRefresh(
 ): Promise<RunSignalRefreshResult> {
   const cwd = options.cwd || process.cwd();
   const logger = options.logger || ((line: string) => console.log(line));
-  const concurrency = parseNum(process.env.SIGNALS_REFRESH_CONCURRENCY, 4);
+  const concurrency = parseNum(process.env.SIGNALS_REFRESH_CONCURRENCY, 1);
   const defaultBatchSize = process.env.VERCEL
     ? parseNum(process.env.SIGNALS_REFRESH_BATCH_SIZE, 4)
     : Number.POSITIVE_INFINITY;
   const maxTraders = options.maxTraders ?? defaultBatchSize;
   const storage = createSignalStorage(cwd);
 
+  const isContinuingSnapshot = options.snapshotId !== undefined && options.snapshotId !== null;
   let snapshotId: number | null = options.snapshotId ?? null;
 
   try {
@@ -54,13 +111,19 @@ export async function runSignalRefresh(
     }
 
     const previousRuns = await storage.getSignalTraderRuns(snapshotId);
-    const processedWallets = new Set(previousRuns.map((run) => run.walletAddress));
-    const pendingTraders = traders.filter((trader) => !processedWallets.has(trader.walletAddress));
+    const progress = summarizeSignalRefreshProgress(traders, previousRuns, {
+      retryFailed: options.retryFailed ?? isContinuingSnapshot,
+    });
+    const { completedWallets, failedWallets, pendingTraders, interruptedRuns } = progress;
+    if (interruptedRuns > 0) {
+      logger(`Signals refresh found ${interruptedRuns} interrupted trader run(s); retrying unfinished wallets.`);
+    }
+
     const tradersToRun = pendingTraders.slice(0, maxTraders);
 
-    let completed = previousRuns.filter((run) => run.status === "success").length;
-    let failed = previousRuns.filter((run) => run.status === "failed").length;
-    let totalPositions = previousRuns.reduce((sum, run) => sum + Number(run.positionsFound || 0), 0);
+    let completed = progress.completed;
+    let failed = progress.failed;
+    let totalPositions = progress.totalPositions;
 
     logger(
       `Signals refresh batch started for snapshot #${snapshotId}: ${tradersToRun.length}/${pendingTraders.length} pending traders`,
@@ -87,7 +150,10 @@ export async function runSignalRefresh(
         });
 
         await storage.insertTraderPositions(snapshotId as number, positions);
-        completed += 1;
+        completedWallets.add(normalizeWalletAddress(trader.walletAddress));
+        failedWallets.delete(normalizeWalletAddress(trader.walletAddress));
+        completed = completedWallets.size;
+        failed = failedWallets.size;
         totalPositions += positions.length;
         await storage.updateSignalTraderRun(runId, {
           status: "success",
@@ -103,7 +169,10 @@ export async function runSignalRefresh(
         });
         logger(`Signals ${trader.traderName} — ${positions.length} open perps`);
       } catch (error) {
-        failed += 1;
+        failedWallets.add(normalizeWalletAddress(trader.walletAddress));
+        completedWallets.delete(normalizeWalletAddress(trader.walletAddress));
+        completed = completedWallets.size;
+        failed = failedWallets.size;
         const message = (error as Error)?.message || String(error);
         await storage.updateSignalTraderRun(runId, {
           status: "failed",
@@ -136,7 +205,7 @@ export async function runSignalRefresh(
     const metrics = aggregateTokenSignalMetrics(snapshotId, allPositions);
     await storage.replaceTokenSignalMetrics(snapshotId, metrics);
 
-    const tradersRemaining = Math.max(0, pendingTraders.length - tradersToRun.length);
+    const tradersRemaining = Math.max(0, traders.length - completed - failed);
     const status: SignalSnapshotStatus =
       tradersRemaining > 0
         ? "running"

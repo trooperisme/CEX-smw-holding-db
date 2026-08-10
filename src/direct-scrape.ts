@@ -1,23 +1,12 @@
 import dotenv from "dotenv";
-import { createBrowserContext } from "./browser";
-import { dedupeParsedHoldings, normalizeHolding } from "./parser";
-import { ensureDirExists, resolveWorkspacePaths } from "./runtime-paths";
-import { scrapeWallet } from "./scraper";
 import { WalletInput } from "./types";
+import {
+  createWalletScrapeSession,
+  executeWalletScrape,
+  resolveWalletScrapeSettings,
+} from "./wallet-scrape-execution";
 
 dotenv.config();
-
-function parseBool(value: string | undefined, fallback = false): boolean {
-  if (!value) return fallback;
-  return value.toLowerCase() === "true";
-}
-
-function parseNum(value: string | undefined, fallback: number): number {
-  if (!value) return fallback;
-  const num = Number(value);
-  if (!Number.isFinite(num)) return fallback;
-  return num;
-}
 
 async function main(): Promise<void> {
   const fullUrl = process.argv[2];
@@ -27,18 +16,14 @@ async function main(): Promise<void> {
   }
 
   const cwd = process.cwd();
-  const headless = parseBool(process.env.HEADLESS, false);
-  const minHoldingUsd = parseNum(process.env.MIN_HOLDING_USD, 555);
-  const screenshotsEnabled = parseBool(process.env.SCREENSHOTS_ENABLED, true);
-  const includeDefi = parseBool(process.env.INCLUDE_DEFI, false);
-  const paths = resolveWorkspacePaths(cwd);
-  ensureDirExists(paths.screenshotsDir);
-
-  const browserSession = await createBrowserContext({
+  const logger = (line: string) => console.log(line);
+  const scrapeSettings = resolveWalletScrapeSettings({
     cwd,
-    headless,
-    logger: (line) => console.log(line),
+    logger,
+    minHoldingUsdDefault: 555,
   });
+
+  const browserSession = await createWalletScrapeSession(scrapeSettings);
 
   try {
     const page = await browserSession.newPage();
@@ -47,34 +32,18 @@ async function main(): Promise<void> {
       url: fullUrl,
     };
 
-    const scraped = await scrapeWallet(page, wallet, {
-      cwd,
-      minHoldingUsd,
-      headless,
-      screenshotsEnabled,
-      screenshotsDir: paths.screenshotsDir,
-      includeDefi,
-      logger: (line) => console.log(line),
-    });
-
-    const parsed = dedupeParsedHoldings(
-      scraped.tokens
-        .map((token) => normalizeHolding(wallet, token))
-        .filter((row): row is NonNullable<typeof row> => row !== null),
-    );
-
-    const totalUsd = parsed.reduce((sum, row) => sum + row.valueUsd, 0);
+    const scraped = await executeWalletScrape(page, wallet, scrapeSettings);
 
     console.log(
       JSON.stringify(
         {
           label,
           url: fullUrl,
-          minHoldingUsd,
-          tokensFound: parsed.length,
-          totalUsd,
+          minHoldingUsd: scrapeSettings.minHoldingUsd,
+          tokensFound: scraped.holdings.length,
+          totalUsd: scraped.totalValueUsd,
           screenshotPath: scraped.screenshotPath,
-          holdings: parsed
+          holdings: scraped.holdings
             .sort((a, b) => b.valueUsd - a.valueUsd)
             .map((row) => ({
               tokenSymbol: row.tokenSymbol,

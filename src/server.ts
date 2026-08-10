@@ -11,10 +11,12 @@ import { buildSignalSnapshotCoverageSummary } from "./signal-coverage";
 import { buildSignalMarkdownExport } from "./signal-export";
 import { runSignalRefresh } from "./signal-refresh";
 import { createSignalStorage } from "./signal-storage";
+import { runSpotHoldingsScan } from "./spot-holdings";
+import { classifySpotToken, getSpotTokenFilterConfig, normalizeSpotTokenSymbol } from "./spot-token-filter";
 import { createStorage } from "./storage";
 import { runSheetSyncToSupabase } from "./sync";
 import { loadTrackedTraders } from "./trader-registry";
-import { SignalMarketType } from "./types";
+import { SignalMarketType, SignalTraderRunRecord } from "./types";
 
 dotenv.config();
 
@@ -34,6 +36,10 @@ type ScanRuntime = {
   signalsLastError: string | null;
   signalsLastResult: unknown | null;
   signalsCurrentSnapshotId: number | null;
+  spotRunning: boolean;
+  spotLogs: string[];
+  spotLastError: string | null;
+  spotLastResult: unknown | null;
 };
 
 const app = express();
@@ -55,10 +61,15 @@ const runtime: ScanRuntime = {
   signalsLastError: null,
   signalsLastResult: null,
   signalsCurrentSnapshotId: null,
+  spotRunning: false,
+  spotLogs: [],
+  spotLastError: null,
+  spotLastResult: null,
 };
 
 const AUTH_COOKIE_NAME = "signals_auth";
 const AUTH_COOKIE_MAX_AGE_MS = 1000 * 60 * 60 * 24 * 14;
+const AUTH_USERNAME = process.env.APP_USERNAME || process.env.SIGNALS_APP_USERNAME || "admin";
 const AUTH_PASSWORD = process.env.APP_PASSWORD || process.env.SIGNALS_APP_PASSWORD || "";
 const AUTH_SECRET =
   process.env.APP_COOKIE_SECRET ||
@@ -80,6 +91,12 @@ function parseCookies(cookieHeader: string | undefined): Record<string, string> 
 
 function signAuthPayload(payload: string): string {
   return crypto.createHmac("sha256", AUTH_SECRET).update(payload).digest("hex");
+}
+
+function credentialsMatch(actual: string, expected: string): boolean {
+  const actualDigest = crypto.createHash("sha256").update(actual).digest();
+  const expectedDigest = crypto.createHash("sha256").update(expected).digest();
+  return crypto.timingSafeEqual(actualDigest, expectedDigest);
 }
 
 function createAuthCookieValue(): string {
@@ -152,22 +169,217 @@ function parseMarketType(input: unknown): SignalMarketType {
   return String(input || "").toLowerCase() === "tradfi" ? "tradfi" : "crypto";
 }
 
+function buildSpotUrl(walletAddress: string): string {
+  return `https://hypurrscan.io/address/${walletAddress}#spot`;
+}
+
+function getSpotHoldingsOutputPath() {
+  const spotDir = path.join(paths.processedDataDir, "spot-holdings");
+  const outputPath = path.join(spotDir, "spot-holdings.json");
+  const legacyOutputPath = path.join(spotDir, "spot-holdings-over-50.json");
+  return fs.existsSync(outputPath) || !fs.existsSync(legacyOutputPath) ? outputPath : legacyOutputPath;
+}
+
+function loadSpotHoldingsDashboard() {
+  const outputPath = getSpotHoldingsOutputPath();
+  if (!fs.existsSync(outputPath)) {
+    return {
+      generatedAt: null,
+      outputPath: resolveWorkspaceFilePath(cwd, outputPath) ? path.relative(cwd, outputPath) : outputPath,
+      summary: {
+        tradersScanned: 0,
+        tradersWithRelevantHoldings: 0,
+        failures: 0,
+        minUsd: 11,
+        rawHoldings: 0,
+        keptHoldings: 0,
+        relevantHoldings: 0,
+        filteredOut: { stable: 0, trash: 0, unrelated: 0 },
+        includeTokens: Array.from(getSpotTokenFilterConfig().includeTokens),
+        relevantTokens: Array.from(getSpotTokenFilterConfig().includeTokens),
+      },
+      rows: [],
+    };
+  }
+
+  const payload = JSON.parse(fs.readFileSync(outputPath, "utf-8")) as {
+    generatedAt?: string;
+    tradersScanned?: number;
+    failures?: number;
+    minUsd?: number;
+    tokenFilter?: {
+      includeTokens?: string[];
+      relevantTokens?: string[];
+      filteredOut?: { stable?: number; trash?: number; unrelated?: number };
+    };
+    results?: Array<{
+      traderName?: string;
+      walletAddress?: string;
+      spotUrl?: string;
+      holdings?: Array<{ token?: string; valueUsd?: number; valueText?: string }>;
+    }>;
+  };
+
+  const filterConfig = getSpotTokenFilterConfig();
+  const grouped = new Map<
+    string,
+    {
+      token: string;
+      holders: Map<
+        string,
+        {
+          traderName: string;
+          walletAddress: string;
+          spotUrl: string;
+          valueUsd: number;
+        }
+      >;
+      totalValueUsd: number;
+    }
+  >();
+  const filteredOut = { stable: 0, trash: 0, unrelated: 0 };
+  let rawHoldings = 0;
+  let keptHoldings = 0;
+
+  for (const trader of payload.results || []) {
+    const traderName = String(trader.traderName || "").trim();
+    const walletAddress = String(trader.walletAddress || "").trim().toLowerCase();
+    if (!traderName || !walletAddress) continue;
+
+    for (const holding of trader.holdings || []) {
+      rawHoldings += 1;
+      const token = normalizeSpotTokenSymbol(String(holding.token || ""));
+      const category = classifySpotToken(token, filterConfig);
+      if (category !== "displayable") {
+        filteredOut[category] += 1;
+        continue;
+      }
+
+      const valueUsd = Number(holding.valueUsd || 0);
+      if (!Number.isFinite(valueUsd) || valueUsd <= 0) continue;
+      keptHoldings += 1;
+
+      const entry =
+        grouped.get(token) ||
+        {
+          token,
+          holders: new Map(),
+          totalValueUsd: 0,
+        };
+      const existing = entry.holders.get(walletAddress);
+      entry.holders.set(walletAddress, {
+        traderName,
+        walletAddress,
+        spotUrl: String(trader.spotUrl || "") || buildSpotUrl(walletAddress),
+        valueUsd: (existing?.valueUsd || 0) + valueUsd,
+      });
+      entry.totalValueUsd += valueUsd;
+      grouped.set(token, entry);
+    }
+  }
+
+  const rows = Array.from(grouped.values())
+    .map((entry) => {
+      const holders = Array.from(entry.holders.values()).sort((a, b) => b.valueUsd - a.valueUsd);
+      const topHolder = holders[0] || null;
+      return {
+        token: entry.token,
+        holdersCount: holders.length,
+        totalValueUsd: Number(entry.totalValueUsd.toFixed(2)),
+        avgValueUsd: holders.length ? Number((entry.totalValueUsd / holders.length).toFixed(2)) : 0,
+        topHolderName: topHolder?.traderName || null,
+        topHolderWallet: topHolder?.walletAddress || null,
+        topHolderValueUsd: topHolder?.valueUsd || 0,
+        holders,
+      };
+    })
+    .sort((a, b) => {
+      if (b.holdersCount !== a.holdersCount) return b.holdersCount - a.holdersCount;
+      if (b.totalValueUsd !== a.totalValueUsd) return b.totalValueUsd - a.totalValueUsd;
+      return a.token.localeCompare(b.token, undefined, { sensitivity: "base" });
+    });
+
+  return {
+    generatedAt: payload.generatedAt || null,
+    outputPath: path.relative(cwd, outputPath),
+    summary: {
+      tradersScanned: Number(payload.tradersScanned || 0),
+      tradersWithRelevantHoldings: rows.reduce((count, row) => count + row.holdersCount, 0),
+      failures: Number(payload.failures || 0),
+      minUsd: payload.minUsd ?? 11,
+      rawHoldings,
+      keptHoldings,
+      relevantHoldings: keptHoldings,
+      filteredOut: payload.tokenFilter?.filteredOut || filteredOut,
+      includeTokens: payload.tokenFilter?.includeTokens || payload.tokenFilter?.relevantTokens || Array.from(filterConfig.includeTokens),
+      relevantTokens: payload.tokenFilter?.includeTokens || payload.tokenFilter?.relevantTokens || Array.from(filterConfig.includeTokens),
+    },
+    rows,
+  };
+}
+
+function startSpotHoldingsRefresh(): { started: boolean; alreadyRunning: boolean; promise: Promise<void> | null } {
+  if (runtime.spotRunning) {
+    return { started: false, alreadyRunning: true, promise: null };
+  }
+
+  runtime.spotRunning = true;
+  runtime.spotLogs = [];
+  runtime.spotLastError = null;
+  runtime.spotLastResult = null;
+
+  const logger = (line: string) => {
+    const formatted = `${new Date().toISOString()} ${line}`;
+    runtime.spotLogs.push(formatted);
+    if (runtime.spotLogs.length > 2000) runtime.spotLogs.shift();
+    console.log(formatted);
+  };
+
+  const promise = runSpotHoldingsScan({ cwd, logger })
+    .then((result) => {
+      runtime.spotLastResult = {
+        generatedAt: result.generatedAt,
+        tradersScanned: result.tradersScanned,
+        tradersWithFilteredHoldings: result.tradersWithFilteredHoldings,
+        failures: result.failures,
+      };
+    })
+    .catch((error) => {
+      runtime.spotLastError = (error as Error)?.message || String(error);
+      logger(`Spot holdings fatal error: ${runtime.spotLastError}`);
+    })
+    .finally(() => {
+      runtime.spotRunning = false;
+    });
+
+  return { started: true, alreadyRunning: false, promise };
+}
+
 async function buildSignalRunSummary(storage: ReturnType<typeof createSignalStorage>, snapshotId: number) {
   const runs = await storage.getSignalTraderRuns(snapshotId);
-  const failedCount = runs.filter((run) => run.status === "failed").length;
-  const zeroPositionCount = runs.filter(
+  const latestRuns = getLatestSignalRunsByWallet(runs);
+  const failedCount = latestRuns.filter((run) => run.status === "failed").length;
+  const zeroPositionCount = latestRuns.filter(
     (run) => run.status === "success" && Number(run.positionsFound || 0) === 0,
   ).length;
-  const tradersWithPositionsCount = runs.filter(
+  const tradersWithPositionsCount = latestRuns.filter(
     (run) => run.status === "success" && Number(run.positionsFound || 0) > 0,
   ).length;
 
   return {
-    totalRuns: runs.length,
+    totalRuns: latestRuns.length,
     failedCount,
     zeroPositionCount,
     tradersWithPositionsCount,
   };
+}
+
+function getLatestSignalRunsByWallet(runs: SignalTraderRunRecord[]): SignalTraderRunRecord[] {
+  const latestByWallet = new Map<string, SignalTraderRunRecord>();
+  for (const run of runs) {
+    latestByWallet.set(String(run.walletAddress || "").trim().toLowerCase(), run);
+  }
+  return Array.from(latestByWallet.values());
 }
 
 async function buildSignalCoverageSummary(
@@ -194,7 +406,7 @@ app.use(
   },
   express.static(paths.dashboardDir, { index: false }),
 );
-app.use("/screenshots", express.static(paths.screenshotsDir));
+app.use("/screenshots", requireSignalsAuth, express.static(paths.screenshotsDir));
 app.use("/api/signals", requireSignalsAuth);
 
 app.get("/", (req, res) => {
@@ -206,9 +418,13 @@ app.get("/login", (_req, res) => {
 });
 
 app.post("/api/auth/login", (req, res) => {
+  const username = String(req.body?.username || "");
   const password = String(req.body?.password || "");
-  if (AUTH_PASSWORD && password !== AUTH_PASSWORD) {
-    res.status(401).json({ ok: false, error: "Invalid password" });
+  if (
+    AUTH_PASSWORD &&
+    (!credentialsMatch(username, AUTH_USERNAME) || !credentialsMatch(password, AUTH_PASSWORD))
+  ) {
+    res.status(401).json({ ok: false, error: "Invalid username or password" });
     return;
   }
 
@@ -240,8 +456,11 @@ app.get("/api/health", (_req, res) => {
     syncRunning: runtime.syncRunning,
     jobsRunning: runtime.jobsRunning,
     signalsRunning: runtime.signalsRunning,
+    spotRunning: runtime.spotRunning,
   });
 });
+
+app.use("/api", requireSignalsAuth);
 
 app.get("/api/artifacts/file", (req, res) => {
   const requestedPath = typeof req.query.path === "string" ? req.query.path : "";
@@ -252,6 +471,43 @@ app.get("/api/artifacts/file", (req, res) => {
   }
 
   res.sendFile(resolvedPath);
+});
+
+app.get("/api/spot-holdings", (_req, res) => {
+  try {
+    res.json(loadSpotHoldingsDashboard());
+  } catch (error) {
+    res.status(500).json({ error: (error as Error)?.message || String(error) });
+  }
+});
+
+app.post("/api/spot-holdings/refresh", async (_req, res) => {
+  const spotRefresh = startSpotHoldingsRefresh();
+  if (!spotRefresh.started && spotRefresh.alreadyRunning) {
+    res.status(409).json({ error: "Spot holdings refresh already running" });
+    return;
+  }
+
+  if (RUN_SYNCHRONOUSLY) {
+    await spotRefresh.promise;
+    if (runtime.spotLastError) {
+      res.status(500).json({ ok: false, error: runtime.spotLastError });
+      return;
+    }
+    res.json({ ok: true, started: true, completed: true, result: runtime.spotLastResult });
+    return;
+  }
+
+  res.json({ ok: true, started: true });
+});
+
+app.get("/api/spot-holdings/refresh/status", (_req, res) => {
+  res.json({
+    running: runtime.spotRunning,
+    lastError: runtime.spotLastError,
+    lastResult: runtime.spotLastResult,
+    logs: runtime.spotLogs.slice(-500),
+  });
 });
 
 app.get("/api/scans", (_req, res) => {
@@ -336,9 +592,10 @@ app.post("/api/signals/refresh", async (_req, res) => {
     .finally(() => {
       runtime.signalsRunning = false;
     });
+  const spotRefresh = startSpotHoldingsRefresh();
 
   if (RUN_SYNCHRONOUSLY) {
-    await refreshPromise;
+    await Promise.all([refreshPromise, spotRefresh.promise || Promise.resolve()]);
     if (runtime.signalsLastError) {
       res.status(500).json({ ok: false, error: runtime.signalsLastError, snapshotId });
       return;
@@ -350,11 +607,22 @@ app.post("/api/signals/refresh", async (_req, res) => {
       snapshotId,
       tradersTotal: traders.length,
       result: runtime.signalsLastResult,
+      spotStarted: spotRefresh.started,
+      spotAlreadyRunning: spotRefresh.alreadyRunning,
+      spotResult: runtime.spotLastResult,
+      spotError: runtime.spotLastError,
     });
     return;
   }
 
-  res.json({ ok: true, started: true, snapshotId, tradersTotal: traders.length });
+  res.json({
+    ok: true,
+    started: true,
+    snapshotId,
+    tradersTotal: traders.length,
+    spotStarted: spotRefresh.started,
+    spotAlreadyRunning: spotRefresh.alreadyRunning,
+  });
 });
 
 app.get("/api/signals/refresh/:snapshotId/status", async (req, res) => {
@@ -372,16 +640,18 @@ app.get("/api/signals/refresh/:snapshotId/status", async (req, res) => {
       return;
     }
 
+    const runs = await storage.getSignalTraderRuns(snapshotId);
+    const isThisSnapshotRunning = runtime.signalsRunning && runtime.signalsCurrentSnapshotId === snapshotId;
+
     res.json({
       snapshot,
-      runs: await storage.getSignalTraderRuns(snapshotId),
+      runs,
       runtime: {
-        running: runtime.signalsRunning && runtime.signalsCurrentSnapshotId === snapshotId,
+        running: isThisSnapshotRunning,
         snapshotRunning: snapshot.status === "running",
         canContinue:
-          RUN_SYNCHRONOUSLY &&
-          snapshot.status === "running" &&
-          !(runtime.signalsRunning && runtime.signalsCurrentSnapshotId === snapshotId),
+          !isThisSnapshotRunning &&
+          (snapshot.status === "running" || snapshot.status === "partial" || snapshot.status === "failed"),
         logs:
           runtime.signalsCurrentSnapshotId === snapshotId
             ? runtime.signalsLogs.slice(-500)
@@ -411,6 +681,7 @@ app.post("/api/signals/refresh/:snapshotId/continue", async (req, res) => {
   }
 
   runtime.signalsRunning = true;
+  runtime.signalsLogs = [];
   runtime.signalsLastError = null;
   runtime.signalsLastResult = null;
   runtime.signalsCurrentSnapshotId = snapshotId;
@@ -422,18 +693,30 @@ app.post("/api/signals/refresh/:snapshotId/continue", async (req, res) => {
     console.log(formatted);
   };
 
-  try {
-    const result = await runSignalRefresh({ cwd, logger, snapshotId });
-    runtime.signalsLastResult = result;
-    res.json({ ok: true, continued: true, snapshotId, result });
-  } catch (error) {
-    const message = (error as Error)?.message || String(error);
-    runtime.signalsLastError = message;
-    logger(`Signals continuation error: ${message}`);
-    res.status(500).json({ ok: false, error: message, snapshotId });
-  } finally {
-    runtime.signalsRunning = false;
+  const continuePromise = runSignalRefresh({ cwd, logger, snapshotId, retryFailed: true })
+    .then((result) => {
+      runtime.signalsLastResult = result;
+    })
+    .catch((error) => {
+      const message = (error as Error)?.message || String(error);
+      runtime.signalsLastError = message;
+      logger(`Signals continuation error: ${message}`);
+    })
+    .finally(() => {
+      runtime.signalsRunning = false;
+    });
+
+  if (RUN_SYNCHRONOUSLY) {
+    await continuePromise;
+    if (runtime.signalsLastError) {
+      res.status(500).json({ ok: false, error: runtime.signalsLastError, snapshotId });
+      return;
+    }
+    res.json({ ok: true, continued: true, completed: true, snapshotId, result: runtime.signalsLastResult });
+    return;
   }
+
+  res.json({ ok: true, continued: true, snapshotId });
 });
 
 app.get("/api/signals/snapshots", async (_req, res) => {

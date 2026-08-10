@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { buildSignalSnapshotCoverageSummary } from "./signal-coverage";
 import { buildSignalMarkdownExport } from "./signal-export";
 import { parseHypurrscanMarkdown, scrapeHypurrscanSignals } from "./hypurrscan-signals";
+import { summarizeSignalRefreshProgress } from "./signal-refresh";
 import { aggregateTokenSignalMetrics } from "./signals";
 import { classifySignalMarketType, loadTrackedTraders } from "./trader-registry";
 
@@ -99,6 +100,127 @@ test("scrapeHypurrscanSignals retries transient Firecrawl retrieval failures", a
       process.env.HYPURRSCAN_SCRAPE_RETRY_COUNT = previousRetryCount;
     }
   }
+});
+
+test("summarizeSignalRefreshProgress retries interrupted running trader runs", () => {
+  const traders = [
+    {
+      traderName: "Done",
+      hypurrscanUrl: "https://hypurrscan.io/address/0x1111111111111111111111111111111111111111#perps",
+      walletAddress: "0x1111111111111111111111111111111111111111",
+      isActive: true,
+    },
+    {
+      traderName: "Interrupted",
+      hypurrscanUrl: "https://hypurrscan.io/address/0x2222222222222222222222222222222222222222#perps",
+      walletAddress: "0x2222222222222222222222222222222222222222",
+      isActive: true,
+    },
+    {
+      traderName: "Failed",
+      hypurrscanUrl: "https://hypurrscan.io/address/0x3333333333333333333333333333333333333333#perps",
+      walletAddress: "0x3333333333333333333333333333333333333333",
+      isActive: true,
+    },
+  ];
+
+  const progress = summarizeSignalRefreshProgress(traders, [
+    {
+      snapshotId: 80,
+      traderName: "Done",
+      walletAddress: "0x1111111111111111111111111111111111111111",
+      sourceUrl: traders[0].hypurrscanUrl,
+      status: "success",
+      positionsFound: 2,
+      errorMessage: null,
+      startedAt: "2026-07-07T06:55:00.000Z",
+      finishedAt: "2026-07-07T06:55:05.000Z",
+    },
+    {
+      snapshotId: 80,
+      traderName: "Interrupted",
+      walletAddress: "0x2222222222222222222222222222222222222222",
+      sourceUrl: traders[1].hypurrscanUrl,
+      status: "running",
+      positionsFound: 0,
+      errorMessage: null,
+      startedAt: "2026-07-07T06:55:06.000Z",
+      finishedAt: null,
+    },
+    {
+      snapshotId: 80,
+      traderName: "Failed",
+      walletAddress: "0x3333333333333333333333333333333333333333",
+      sourceUrl: traders[2].hypurrscanUrl,
+      status: "failed",
+      positionsFound: 0,
+      errorMessage: "timeout",
+      startedAt: "2026-07-07T06:55:07.000Z",
+      finishedAt: "2026-07-07T06:55:10.000Z",
+    },
+  ]);
+
+  assert.equal(progress.completed, 1);
+  assert.equal(progress.failed, 1);
+  assert.equal(progress.totalPositions, 2);
+  assert.equal(progress.interruptedRuns, 1);
+  assert.deepEqual(
+    progress.pendingTraders.map((trader) => trader.traderName),
+    ["Interrupted"],
+  );
+});
+
+test("summarizeSignalRefreshProgress can retry failed trader runs when continuing a snapshot", () => {
+  const traders = [
+    {
+      traderName: "Done",
+      hypurrscanUrl: "https://hypurrscan.io/address/0x1111111111111111111111111111111111111111#perps",
+      walletAddress: "0x1111111111111111111111111111111111111111",
+      isActive: true,
+    },
+    {
+      traderName: "Rate Limited",
+      hypurrscanUrl: "https://hypurrscan.io/address/0x2222222222222222222222222222222222222222#perps",
+      walletAddress: "0x2222222222222222222222222222222222222222",
+      isActive: true,
+    },
+  ];
+
+  const progress = summarizeSignalRefreshProgress(
+    traders,
+    [
+      {
+        snapshotId: 95,
+        traderName: "Done",
+        walletAddress: "0x1111111111111111111111111111111111111111",
+        sourceUrl: traders[0].hypurrscanUrl,
+        status: "success",
+        positionsFound: 2,
+        errorMessage: null,
+        startedAt: "2026-08-03T08:49:00.000Z",
+        finishedAt: "2026-08-03T08:49:05.000Z",
+      },
+      {
+        snapshotId: 95,
+        traderName: "Rate Limited",
+        walletAddress: "0x2222222222222222222222222222222222222222",
+        sourceUrl: traders[1].hypurrscanUrl,
+        status: "failed",
+        positionsFound: 0,
+        errorMessage: "Firecrawl scrape failed (429): retry after 25s",
+        startedAt: "2026-08-03T08:49:06.000Z",
+        finishedAt: "2026-08-03T08:49:10.000Z",
+      },
+    ],
+    { retryFailed: true },
+  );
+
+  assert.equal(progress.completed, 1);
+  assert.equal(progress.failed, 1);
+  assert.deepEqual(
+    progress.pendingTraders.map((trader) => trader.traderName),
+    ["Rate Limited"],
+  );
 });
 
 test("aggregateTokenSignalMetrics computes token-level signal rows", () => {

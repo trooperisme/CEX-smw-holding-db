@@ -11,9 +11,11 @@
       <section class="login-card">
         <p class="eyebrow">Private Access</p>
         <h1>Hypurrscan Signals</h1>
-        <p class="login-copy">Enter the app password to access the manual refresh dashboard.</p>
+        <p class="login-copy">Sign in to access the private holdings dashboard.</p>
 
         <form id="login-form" class="login-form">
+          <label class="field-label" for="username">Username</label>
+          <input id="username" name="username" type="text" autocomplete="username" required autofocus />
           <label class="field-label" for="password">Password</label>
           <input id="password" name="password" type="password" autocomplete="current-password" required />
           <button class="action-button action-button--primary" type="submit">Open Dashboard</button>
@@ -30,11 +32,12 @@
         event.preventDefault();
         errorEl.hidden = true;
 
+        const username = document.getElementById("username").value;
         const password = document.getElementById("password").value;
         const response = await fetch("/api/auth/login", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ password }),
+          body: JSON.stringify({ username, password }),
         });
 
         if (response.ok) {

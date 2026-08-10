@@ -1,10 +1,11 @@
 import dotenv from "dotenv";
-import { createBrowserContext } from "./browser";
-import { dedupeParsedHoldings, normalizeHolding } from "./parser";
-import { ensureDirExists, resolveWorkspacePaths } from "./runtime-paths";
-import { scrapeWallet } from "./scraper";
 import { getSupabaseAdminClient } from "./supabase";
 import { ScanLogger, WalletInput } from "./types";
+import {
+  createWalletScrapeSession,
+  executeWalletScrape,
+  resolveWalletScrapeSettings,
+} from "./wallet-scrape-execution";
 
 dotenv.config();
 
@@ -36,11 +37,6 @@ type RunJobsSummary = {
   holdingsInserted: number;
 };
 
-function parseBool(value: string | undefined, fallback = false): boolean {
-  if (!value) return fallback;
-  return value.toLowerCase() === "true";
-}
-
 function parseNum(value: string | undefined, fallback: number): number {
   if (!value) return fallback;
   const num = Number(value);
@@ -52,12 +48,11 @@ export async function runQueuedScrapeJobs(options: WorkerOptions = {}): Promise<
   const cwd = options.cwd || process.cwd();
   const logger = options.logger || ((line: string) => console.log(line));
   const limit = options.limit ?? parseNum(process.env.SCRAPE_JOB_LIMIT, 5);
-  const minHoldingUsd = parseNum(process.env.MIN_HOLDING_USD, 555);
-  const headless = parseBool(process.env.HEADLESS, false);
-  const screenshotsEnabled = parseBool(process.env.SCREENSHOTS_ENABLED, true);
-  const includeDefi = parseBool(process.env.INCLUDE_DEFI, false);
-  const paths = resolveWorkspacePaths(cwd);
-  ensureDirExists(paths.screenshotsDir);
+  const scrapeSettings = resolveWalletScrapeSettings({
+    cwd,
+    logger,
+    minHoldingUsdDefault: 555,
+  });
 
   const supabase = getSupabaseAdminClient();
   const { data: jobsData, error: jobsError } = await supabase
@@ -94,7 +89,7 @@ export async function runQueuedScrapeJobs(options: WorkerOptions = {}): Promise<
   const { data: snapshotData, error: snapshotError } = await supabase
     .from("snapshots")
     .insert({
-      threshold_usd: minHoldingUsd,
+      threshold_usd: scrapeSettings.minHoldingUsd,
       trigger_type: "manual_rescrape",
     })
     .select("id")
@@ -104,7 +99,7 @@ export async function runQueuedScrapeJobs(options: WorkerOptions = {}): Promise<
   }
   const snapshotId = snapshotData.id as string;
 
-  const browserSession = await createBrowserContext({ cwd, headless, logger });
+  const browserSession = await createWalletScrapeSession(scrapeSettings);
   const page = await browserSession.newPage();
 
   let jobsSucceeded = 0;
@@ -162,24 +157,10 @@ export async function runQueuedScrapeJobs(options: WorkerOptions = {}): Promise<
       logger(`Running scrape job ${job.id} for ${wallet.label}`);
 
       try {
-        const scraped = await scrapeWallet(page, wallet, {
-          cwd,
-          minHoldingUsd,
-          headless,
-          screenshotsEnabled,
-          screenshotsDir: paths.screenshotsDir,
-          includeDefi,
-          logger,
-        });
+        const scraped = await executeWalletScrape(page, wallet, scrapeSettings);
 
-        const parsed = dedupeParsedHoldings(
-          scraped.tokens
-            .map((token) => normalizeHolding(wallet, token))
-            .filter((row): row is NonNullable<typeof row> => row !== null),
-        );
-
-        if (parsed.length > 0) {
-          const insertPayload = parsed.map((row) => ({
+        if (scraped.holdings.length > 0) {
+          const insertPayload = scraped.holdings.map((row) => ({
             snapshot_id: snapshotId,
             entity_pk: entity.id,
             source_type: entity.source_type,

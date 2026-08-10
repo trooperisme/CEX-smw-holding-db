@@ -63,6 +63,21 @@ function requireSupabaseSignals(): boolean {
   return Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
 }
 
+let supabaseSignalsUnavailableReason: string | null = null;
+
+function isSupabaseNetworkError(error: unknown): boolean {
+  const message = (error as Error)?.message || String(error);
+  return /TypeError:\s*fetch failed|fetch failed|ENOTFOUND|EAI_AGAIN|ECONNRESET|ETIMEDOUT/i.test(message);
+}
+
+function markSupabaseSignalsUnavailable(error: unknown): void {
+  if (supabaseSignalsUnavailableReason) return;
+  supabaseSignalsUnavailableReason = (error as Error)?.message || String(error);
+  console.warn(
+    `Supabase signal storage unavailable; falling back to SQLite for this process: ${supabaseSignalsUnavailableReason}`,
+  );
+}
+
 function assertNoSupabaseError(error: { message: string } | null, context: string): void {
   if (error) {
     throw new Error(`${context}: ${error.message}`);
@@ -372,6 +387,73 @@ function createSupabaseSignalStorage(): SignalStorage {
   };
 }
 
+function createResilientSupabaseSignalStorage(cwd: string): SignalStorage {
+  const sqlite = createSqliteSignalStorage(cwd);
+  const supabase = createSupabaseSignalStorage();
+
+  const run = async <T>(operation: () => Promise<T>, fallback: () => Promise<T>): Promise<T> => {
+    if (supabaseSignalsUnavailableReason) {
+      return fallback();
+    }
+
+    try {
+      return await operation();
+    } catch (error) {
+      if (!isSupabaseNetworkError(error)) {
+        throw error;
+      }
+      markSupabaseSignalsUnavailable(error);
+      return fallback();
+    }
+  };
+
+  return {
+    close() {
+      supabase.close();
+      sqlite.close();
+    },
+    replaceTrackedTraders: (traders) =>
+      run(() => supabase.replaceTrackedTraders(traders), () => sqlite.replaceTrackedTraders(traders)),
+    getTrackedTraders: () => run(() => supabase.getTrackedTraders(), () => sqlite.getTrackedTraders()),
+    createSignalSnapshot: (totalTraders) =>
+      run(() => supabase.createSignalSnapshot(totalTraders), () => sqlite.createSignalSnapshot(totalTraders)),
+    updateSignalSnapshot: (args) =>
+      run(() => supabase.updateSignalSnapshot(args), () => sqlite.updateSignalSnapshot(args)),
+    getSignalSnapshots: () => run(() => supabase.getSignalSnapshots(), () => sqlite.getSignalSnapshots()),
+    getLatestSignalSnapshotId: () =>
+      run(() => supabase.getLatestSignalSnapshotId(), () => sqlite.getLatestSignalSnapshotId()),
+    getSignalSnapshot: (snapshotId) =>
+      run(() => supabase.getSignalSnapshot(snapshotId), () => sqlite.getSignalSnapshot(snapshotId)),
+    insertSignalTraderRun: (record) =>
+      run(() => supabase.insertSignalTraderRun(record), () => sqlite.insertSignalTraderRun(record)),
+    updateSignalTraderRun: (runId, updates) =>
+      run(() => supabase.updateSignalTraderRun(runId, updates), () =>
+        sqlite.updateSignalTraderRun(runId, updates),
+      ),
+    getSignalTraderRuns: (snapshotId) =>
+      run(() => supabase.getSignalTraderRuns(snapshotId), () => sqlite.getSignalTraderRuns(snapshotId)),
+    insertTraderPositions: (snapshotId, positions) =>
+      run(() => supabase.insertTraderPositions(snapshotId, positions), () =>
+        sqlite.insertTraderPositions(snapshotId, positions),
+      ),
+    getTraderPositions: (snapshotId) =>
+      run(() => supabase.getTraderPositions(snapshotId), () => sqlite.getTraderPositions(snapshotId)),
+    replaceTokenSignalMetrics: (snapshotId, metrics) =>
+      run(() => supabase.replaceTokenSignalMetrics(snapshotId, metrics), () =>
+        sqlite.replaceTokenSignalMetrics(snapshotId, metrics),
+      ),
+    getTokenSignalMetrics: (snapshotId, marketType) =>
+      run(() => supabase.getTokenSignalMetrics(snapshotId, marketType), () =>
+        sqlite.getTokenSignalMetrics(snapshotId, marketType),
+      ),
+    getTokenDrilldown: (snapshotId, token) =>
+      run(() => supabase.getTokenDrilldown(snapshotId, token), () => sqlite.getTokenDrilldown(snapshotId, token)),
+  };
+}
+
 export function createSignalStorage(cwd: string): SignalStorage {
-  return requireSupabaseSignals() ? createSupabaseSignalStorage() : createSqliteSignalStorage(cwd);
+  if (!requireSupabaseSignals() || supabaseSignalsUnavailableReason) {
+    return createSqliteSignalStorage(cwd);
+  }
+  return createResilientSupabaseSignalStorage(cwd);
 }

@@ -6,6 +6,7 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/src/server.js",
     "scan": "ts-node src/index.ts",
+    "scan:spot": "ts-node src/spot-holdings.ts",
     "dashboard": "ts-node src/server.ts",
     "test": "node --test -r ts-node/register src/*.test.ts",
     "scan:headless": "HEADLESS=true ts-node src/index.ts",

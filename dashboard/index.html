@@ -29,10 +29,11 @@
           <select id="snapshot-select"></select>
         </div>
         <div class="control-block">
-          <span class="field-label">Market</span>
+          <span class="field-label">View</span>
           <div class="tab-list" id="market-tabs">
             <button class="tab-button is-active" type="button" data-market="crypto">Crypto</button>
             <button class="tab-button" type="button" data-market="tradfi">TradFi</button>
+            <button class="tab-button" type="button" data-market="spot">Spot</button>
           </div>
         </div>
         <div class="summary-strip">
@@ -61,35 +62,7 @@
 
         <div class="table-wrap">
           <table class="signals-table">
-            <thead>
-              <tr>
-                <th>Token</th>
-                <th>
-                  <button class="sort-button" type="button" data-sort-key="smwFlows">
-                    <span>SMW Flows</span>
-                    <span class="sort-indicator" aria-hidden="true">-</span>
-                  </button>
-                </th>
-                <th>
-                  <button class="sort-button" type="button" data-sort-key="holdingsUsd">
-                    <span>Holdings</span>
-                    <span class="sort-indicator" aria-hidden="true">-</span>
-                  </button>
-                </th>
-                <th>
-                  <button class="sort-button" type="button" data-sort-key="longSmw">
-                    <span>Long SMW</span>
-                    <span class="sort-indicator" aria-hidden="true">-</span>
-                  </button>
-                </th>
-                <th>
-                  <button class="sort-button" type="button" data-sort-key="shortSmw">
-                    <span>Short SMW</span>
-                    <span class="sort-indicator" aria-hidden="true">-</span>
-                  </button>
-                </th>
-              </tr>
-            </thead>
+            <thead id="table-head"></thead>
             <tbody id="table-body"></tbody>
           </table>
         </div>
