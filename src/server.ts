@@ -12,6 +12,7 @@ import { buildSignalMarkdownExport } from "./signal-export";
 import { runSignalRefresh } from "./signal-refresh";
 import { createSignalStorage } from "./signal-storage";
 import { getSpotHoldingMinUsd, runSpotHoldingsScan } from "./spot-holdings";
+import { hasSupabaseStorage, loadLatestSpotHoldingsDashboard, persistSpotHoldingsSnapshot } from "./spot-storage";
 import { classifySpotToken, getSpotTokenFilterConfig, normalizeSpotTokenSymbol } from "./spot-token-filter";
 import { createStorage } from "./storage";
 import { runSheetSyncToSupabase } from "./sync";
@@ -77,6 +78,14 @@ const AUTH_SECRET =
   process.env.APP_PASSWORD ||
   "local-signals-secret";
 const RUN_SYNCHRONOUSLY = Boolean(process.env.VERCEL);
+const READ_ONLY_HOSTED = Boolean(process.env.VERCEL);
+const HOSTED_MUTATION_ERROR = "Vercel is read-only; run refreshes through GitHub Actions";
+
+function rejectHostedMutation(res: express.Response): boolean {
+  if (!READ_ONLY_HOSTED) return false;
+  res.status(409).json({ error: HOSTED_MUTATION_ERROR });
+  return true;
+}
 
 function parseCookies(cookieHeader: string | undefined): Record<string, string> {
   if (!cookieHeader) return {};
@@ -180,7 +189,7 @@ function getSpotHoldingsOutputPath() {
   return fs.existsSync(outputPath) || !fs.existsSync(legacyOutputPath) ? outputPath : legacyOutputPath;
 }
 
-function loadSpotHoldingsDashboard() {
+function loadSpotHoldingsDashboardFromFile() {
   const outputPath = getSpotHoldingsOutputPath();
   const minUsd = getSpotHoldingMinUsd();
   if (!fs.existsSync(outputPath)) {
@@ -320,6 +329,14 @@ function loadSpotHoldingsDashboard() {
   };
 }
 
+async function loadSpotHoldingsDashboard() {
+  if (process.env.VERCEL && !hasSupabaseStorage()) {
+    throw new Error("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required on Vercel for spot holdings");
+  }
+  if (hasSupabaseStorage()) return loadLatestSpotHoldingsDashboard();
+  return loadSpotHoldingsDashboardFromFile();
+}
+
 function startSpotHoldingsRefresh(): { started: boolean; alreadyRunning: boolean; promise: Promise<void> | null } {
   if (runtime.spotRunning) {
     return { started: false, alreadyRunning: true, promise: null };
@@ -338,8 +355,13 @@ function startSpotHoldingsRefresh(): { started: boolean; alreadyRunning: boolean
   };
 
   const promise = runSpotHoldingsScan({ cwd, logger })
-    .then((result) => {
+    .then(async (result) => {
+      if (process.env.VERCEL && !hasSupabaseStorage()) {
+        throw new Error("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required on Vercel for spot persistence");
+      }
+      const snapshotId = hasSupabaseStorage() ? await persistSpotHoldingsSnapshot(result) : null;
       runtime.spotLastResult = {
+        snapshotId,
         generatedAt: result.generatedAt,
         tradersScanned: result.tradersScanned,
         tradersWithFilteredHoldings: result.tradersWithFilteredHoldings,
@@ -454,6 +476,7 @@ app.get("/dashboard/", requireSignalsAuth, (_req, res) => {
 app.get("/api/health", (_req, res) => {
   res.json({
     ok: true,
+    readOnly: READ_ONLY_HOSTED,
     running: runtime.running,
     syncRunning: runtime.syncRunning,
     jobsRunning: runtime.jobsRunning,
@@ -475,15 +498,19 @@ app.get("/api/artifacts/file", (req, res) => {
   res.sendFile(resolvedPath);
 });
 
-app.get("/api/spot-holdings", (_req, res) => {
+app.get("/api/spot-holdings", async (_req, res) => {
   try {
-    res.json(loadSpotHoldingsDashboard());
+    res.json(await loadSpotHoldingsDashboard());
   } catch (error) {
     res.status(500).json({ error: (error as Error)?.message || String(error) });
   }
 });
 
 app.post("/api/spot-holdings/refresh", async (_req, res) => {
+  if (READ_ONLY_HOSTED) {
+    res.status(409).json({ error: "Refresh runs through GitHub Actions; Vercel is read-only" });
+    return;
+  }
   const spotRefresh = startSpotHoldingsRefresh();
   if (!spotRefresh.started && spotRefresh.alreadyRunning) {
     res.status(409).json({ error: "Spot holdings refresh already running" });
@@ -547,6 +574,10 @@ app.get("/api/jobs/status", (_req, res) => {
 });
 
 app.post("/api/signals/refresh", async (_req, res) => {
+  if (READ_ONLY_HOSTED) {
+    res.status(409).json({ error: "Refresh runs through GitHub Actions; Vercel is read-only" });
+    return;
+  }
   if (!RUN_SYNCHRONOUSLY && runtime.signalsRunning) {
     res.status(409).json({
       error: "Signals refresh already running",
@@ -668,6 +699,10 @@ app.get("/api/signals/refresh/:snapshotId/status", async (req, res) => {
 });
 
 app.post("/api/signals/refresh/:snapshotId/continue", async (req, res) => {
+  if (READ_ONLY_HOSTED) {
+    res.status(409).json({ error: "Refresh runs through GitHub Actions; Vercel is read-only" });
+    return;
+  }
   const snapshotId = Number(req.params.snapshotId);
   if (!Number.isFinite(snapshotId)) {
     res.status(400).json({ error: "Invalid snapshotId" });
@@ -724,7 +759,8 @@ app.post("/api/signals/refresh/:snapshotId/continue", async (req, res) => {
 app.get("/api/signals/snapshots", async (_req, res) => {
   const storage = createSignalStorage(cwd);
   try {
-    res.json({ snapshots: await storage.getSignalSnapshots() });
+    const snapshots = await storage.getSignalSnapshots();
+    res.json({ snapshots: READ_ONLY_HOSTED ? snapshots.filter((snapshot) => snapshot.status === "success") : snapshots });
   } finally {
     storage.close();
   }
@@ -844,6 +880,7 @@ app.get("/api/signals/:snapshotId/token/:token", async (req, res) => {
 });
 
 app.post("/api/admin/sync-sheet", async (_req, res) => {
+  if (rejectHostedMutation(res)) return;
   if (runtime.syncRunning) {
     res.status(409).json({ error: "Sync already running" });
     return;
@@ -867,6 +904,7 @@ app.post("/api/admin/sync-sheet", async (_req, res) => {
 });
 
 app.post("/api/admin/run-scrape-jobs", async (req, res) => {
+  if (rejectHostedMutation(res)) return;
   if (runtime.jobsRunning) {
     res.status(409).json({ error: "Scrape jobs already running" });
     return;
@@ -892,6 +930,7 @@ app.post("/api/admin/run-scrape-jobs", async (req, res) => {
 });
 
 app.post("/api/scan", async (_req, res) => {
+  if (rejectHostedMutation(res)) return;
   if (runtime.running) {
     res.status(409).json({ error: "Scan already running" });
     return;

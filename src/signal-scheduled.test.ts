@@ -20,7 +20,8 @@ test("scheduled refresh runs signal and spot workflows together", async () => {
     spotRunner: async () => {
       calls.push("spot");
       return {
-        source: "main-app",
+        source: "github-action",
+        snapshotId: 128,
         generatedAt: "2026-10-08T01:05:00.000Z",
         tradersScanned: 106,
         tradersWithFilteredHoldings: 12,
@@ -47,7 +48,8 @@ test("scheduled refresh reports spot scrape failures as partial", async () => {
       status: "success",
     }),
     spotRunner: async () => ({
-      source: "main-app",
+      source: "github-action",
+      snapshotId: 129,
       generatedAt: "2026-10-08T01:05:00.000Z",
       tradersScanned: 106,
       tradersWithFilteredHoldings: 11,

@@ -47,6 +47,7 @@ export type SpotHoldingsScanSummary = {
     filteredOut: FilteredOutSummary;
   };
   results: TraderSpotResult[];
+  allResults: TraderSpotResult[];
   failedResults: Array<{
     traderName: string;
     walletAddress: string;
@@ -431,6 +432,7 @@ export async function runSpotHoldingsScan(
       filteredOut,
     },
     results: filteredResults,
+    allResults: results,
     failedResults,
   };
 

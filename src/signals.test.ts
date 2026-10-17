@@ -22,18 +22,44 @@ test("classifySignalMarketType routes prefixed tickers to tradfi", () => {
   assert.equal(classifySignalMarketType("hyna:HYPE"), "tradfi");
 });
 
-test("latest signal snapshot ignores a running snapshot", async () => {
+test("latest signal snapshot ignores unpublished snapshots", async () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "signals-latest-snapshot-"));
   const storage = createSignalStorage(tmpDir);
   try {
     const publishedId = await storage.createSignalSnapshot(1);
     await storage.updateSignalSnapshot({ id: publishedId, status: "success", finishedAt: new Date().toISOString() });
     const runningId = await storage.createSignalSnapshot(1);
+    const failedId = await storage.createSignalSnapshot(1);
+    await storage.updateSignalSnapshot({ id: failedId, status: "failed", errorMessage: "fixture failure" });
 
     assert.ok(runningId > publishedId);
+    assert.ok(failedId > runningId);
     assert.equal(await storage.getLatestSignalSnapshotId(), publishedId);
   } finally {
     storage.close();
+  }
+});
+
+test("durable signal storage fails closed without Supabase configuration", () => {
+  const previousUrl = process.env.SUPABASE_URL;
+  const previousKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const previousRequired = process.env.REQUIRE_SUPABASE_STORAGE;
+
+  try {
+    delete process.env.SUPABASE_URL;
+    delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+    process.env.REQUIRE_SUPABASE_STORAGE = "1";
+    assert.throws(
+      () => createSignalStorage(fs.mkdtempSync(path.join(os.tmpdir(), "signals-durable-config-"))),
+      /SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required for durable signal storage/,
+    );
+  } finally {
+    if (previousUrl === undefined) delete process.env.SUPABASE_URL;
+    else process.env.SUPABASE_URL = previousUrl;
+    if (previousKey === undefined) delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+    else process.env.SUPABASE_SERVICE_ROLE_KEY = previousKey;
+    if (previousRequired === undefined) delete process.env.REQUIRE_SUPABASE_STORAGE;
+    else process.env.REQUIRE_SUPABASE_STORAGE = previousRequired;
   }
 });
 

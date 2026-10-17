@@ -670,7 +670,7 @@ export function createStorage(cwd: string) {
       const row = db
         .prepare(
           `SELECT id FROM signal_snapshots
-           WHERE status IN ('success', 'partial')
+           WHERE status = 'success'
            ORDER BY id DESC LIMIT 1`,
         )
         .get() as { id: number } | undefined;

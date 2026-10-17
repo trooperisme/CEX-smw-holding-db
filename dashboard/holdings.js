@@ -674,6 +674,16 @@ async function copySignalExport() {
 }
 
 async function loadInitialData() {
+  try {
+    const health = await fetchJson("/api/health");
+    if (health.readOnly && els.refreshButton) {
+      els.refreshButton.disabled = true;
+      els.refreshButton.textContent = "Scheduled at 08:00 GMT+7";
+      els.refreshButton.title = "Refreshes run from GitHub Actions and are read-only here.";
+    }
+  } catch {
+    // The data requests below provide the visible error state if health is unavailable.
+  }
   const latest = await loadSnapshots();
   updateSummary(latest);
   await loadSnapshotRows();

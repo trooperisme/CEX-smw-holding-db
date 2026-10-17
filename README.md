@@ -45,29 +45,27 @@ Optional:
   - `EXPORTS_DIR`
   - `RUNS_DIR`
 
-## Railway Variables
+## Vercel Variables
 
-For the deployed dashboard on Railway, only a small subset is actually required:
+Vercel hosts the dashboard and API. Configure these production variables there:
 
-- Required for Hypurrscan signal refresh:
-  - `FIRECRAWL_API_KEY`
-- Recommended for a public Railway deployment:
-  - `APP_USERNAME` (defaults to `admin`)
-  - `APP_PASSWORD`
-  - `APP_COOKIE_SECRET`
-- Required only if you want sheet-backed wallet loading or manual sync:
+- `SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `APP_USERNAME` (defaults to `admin`)
+- `APP_PASSWORD`
+- `APP_COOKIE_SECRET`
+
+Optional Vercel variables for sheet-backed wallet loading or manual sync:
+
   - `GOOGLE_SHEETS_API_KEY`
   - `SPREADSHEET_ID`
   - `SHEET_NAME`
   - `SHEET_GID`
-  - `SUPABASE_URL`
-  - `SUPABASE_SERVICE_ROLE_KEY`
-- Recommended if you want persistent app data on Railway:
-  - mount a volume at `/data`
-  - `DATA_DIR=/data/wallet-scraper`
-  - `HOSTED_DATA_ROOT=/data`
 
-Usually not appropriate on Railway unless you know you need them:
+Do not configure `DATA_DIR=/data` or `HOSTED_DATA_ROOT=/data` on Vercel. The
+filesystem is ephemeral; production snapshots are stored in Supabase.
+
+Usually not appropriate on Vercel:
 
 - Local browser / Cloudflare flow:
   - `HEADLESS`
@@ -92,7 +90,8 @@ Usually not appropriate on Railway unless you know you need them:
   - `EXPORTS_DIR`
   - `RUNS_DIR`
 
-Railway will provide `PORT` automatically. `HOST=0.0.0.0` is safe but not usually necessary.
+Vercel provides the function runtime and public URL. `HOST` and `PORT` are only
+needed for local `npm run dashboard` execution.
 
 ## Run
 
@@ -121,8 +120,8 @@ Scheduled pre-market refresh:
 - The preferred scheduler is GitHub Actions via `.github/workflows/cex-scheduled-refresh.yml`.
 - Use `01:00 UTC` for an 08:00 Asia/Ho_Chi_Minh start, and schedule early enough to finish before the 09:00 desk review.
 - The worker writes a new snapshot through the same Firecrawl pipeline as the dashboard.
-- The dashboard keeps the newest `success` or `partial` snapshot as the published result while a new snapshot is still `running`.
-- Do not run the GitHub Actions scheduler and a Railway cron invocation at the same time; either choice must have one non-overlapping scheduler and Supabase enabled for durable snapshot history.
+- The dashboard keeps the newest successful snapshot published while a new snapshot is running or fails.
+- GitHub Actions is the only production scheduler; do not add a second scheduler.
 
 ### GitHub Actions scheduler
 
@@ -132,17 +131,16 @@ The scheduled refresh runs from GitHub Actions using
 
 Configure these GitHub Actions Secrets before enabling the workflow:
 
-- `APP_USERNAME`
-- `APP_PASSWORD`
 - `FIRECRAWL_API_KEY`
 - `SUPABASE_URL`
 - `SUPABASE_SERVICE_ROLE_KEY`
-- `MAIN_APP_URL` (the authenticated Railway web-service URL used for spot refresh)
 
 Optional GitHub Actions Variables are `SIGNALS_REFRESH_CONCURRENCY`,
 `SPOT_HOLDING_CONCURRENCY`, `SPOT_HOLDING_MIN_USD`, and
 `SPOT_HOLDING_CACHE_TTL_HOURS`. The workflow builds the checked-out commit and
-fails unless the combined signal and spot refresh returns `success`.
+sets `REQUIRE_SUPABASE_STORAGE=1`, so it fails instead of silently writing to
+ephemeral SQLite. It fails unless the combined signal and spot refresh returns
+`success`.
 
 Manual sheet sync to Supabase:
 
@@ -179,7 +177,8 @@ This repo already supports Supabase. The switch is runtime-based:
 - If `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` are both set, signal snapshots and tracked traders use Supabase.
 - If those vars are missing, the app falls back to local SQLite under `data/`.
 
-That means Supabase is the clean fix for Railway persistence. Once attached, deploys no longer wipe signal dashboard history.
+Supabase is the production source of truth for signal and spot snapshots. Vercel
+does not need a persistent local volume.
 
 Apply the SQL migrations to your Supabase project in this order:
 
@@ -188,9 +187,10 @@ supabase/migrations/20260319_000001_initial_wallet_intelligence_schema.sql
 supabase/migrations/20260319_000002_service_role_grants.sql
 supabase/migrations/20260420_000001_signal_dashboard_schema.sql
 supabase/migrations/20260506_000001_entities_updated_at_trigger.sql
+supabase/migrations/20261017_000001_spot_dashboard_schema.sql
 ```
 
-Then set these Railway variables on the deployed service:
+Set these variables in both Vercel and GitHub Actions as appropriate:
 
 ```bash
 SUPABASE_URL=...
@@ -203,7 +203,8 @@ Notes:
 - `FIRECRAWL_API_KEY` is still required for live Hypurrscan refreshes.
 - Spot holdings use Hypurrscan `#spot` pages. By default the Spot view keeps all non-stable/non-trash wallet-token holdings with value `> $333`; set `SPOT_HOLDING_INCLUDE_TOKENS` only if you want to narrow the displayed token set.
 
-After the vars are set, restart or redeploy the Railway service. New refresh runs will write into Supabase automatically.
+After the migration is applied, GitHub Actions writes signal and spot snapshots
+to Supabase and Vercel reads the latest successful snapshots.
 
 ## Key Paths
 
@@ -213,6 +214,7 @@ After the vars are set, restart or redeploy the Railway service. New refresh run
 - `src/signal-refresh.ts`: manual Hypurrscan signal refresh pipeline
 - `src/hypurrscan-signals.ts`: Firecrawl-backed Hypurrscan scrape + perps parser
 - `src/spot-holdings.ts`: Firecrawl-backed Hypurrscan `#spot` scrape + non-stable holdings export
+- `src/spot-storage.ts`: Supabase spot snapshot persistence and dashboard reads
 - `src/spot-token-filter.ts`: Spot token threshold/exclusion config
 - `src/trader-registry.ts`: CSV-backed tracked trader registry loader
 - `src/server.ts`: Express APIs + dashboard hosting

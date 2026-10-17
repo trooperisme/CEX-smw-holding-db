@@ -71,7 +71,7 @@ function resolveDataRoot(cwd: string): { appDataDir: string; dataMode: DataMode 
 
   // Production-safe default: if a mounted data volume exists, keep app data there.
   const hostedDataRoot = process.env.HOSTED_DATA_ROOT?.trim() || "/data";
-  const runningHosted = Boolean(process.env.RAILWAY_ENVIRONMENT || process.env.RENDER || process.env.NODE_ENV === "production");
+  const runningHosted = Boolean(process.env.VERCEL || process.env.RENDER || process.env.NODE_ENV === "production");
   if (runningHosted && dirExists(hostedDataRoot)) {
     return { appDataDir: path.join(hostedDataRoot, APP_SLUG), dataMode: "structured" };
   }

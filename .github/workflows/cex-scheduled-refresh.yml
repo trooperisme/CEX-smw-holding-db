@@ -37,12 +37,10 @@ jobs:
 
       - name: Run scheduled refresh
         env:
-          APP_USERNAME: ${{ secrets.APP_USERNAME }}
-          APP_PASSWORD: ${{ secrets.APP_PASSWORD }}
           FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
-          MAIN_APP_URL: ${{ secrets.MAIN_APP_URL }}
+          REQUIRE_SUPABASE_STORAGE: "1"
           SIGNALS_REFRESH_CONCURRENCY: ${{ vars.SIGNALS_REFRESH_CONCURRENCY || '4' }}
           SPOT_HOLDING_CONCURRENCY: ${{ vars.SPOT_HOLDING_CONCURRENCY || '4' }}
           SPOT_HOLDING_MIN_USD: ${{ vars.SPOT_HOLDING_MIN_USD || '333' }}

@@ -63,6 +63,10 @@ function requireSupabaseSignals(): boolean {
   return Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
 }
 
+function requireDurableSupabaseStorage(): boolean {
+  return String(process.env.REQUIRE_SUPABASE_STORAGE || "").trim() === "1";
+}
+
 let supabaseSignalsUnavailableReason: string | null = null;
 
 function isSupabaseNetworkError(error: unknown): boolean {
@@ -245,7 +249,7 @@ function createSupabaseSignalStorage(): SignalStorage {
       const { data, error } = await supabase
         .from("signal_snapshots")
         .select("id")
-        .in("status", ["success", "partial"])
+        .eq("status", "success")
         .order("id", { ascending: false })
         .limit(1)
         .maybeSingle();
@@ -458,8 +462,13 @@ function createResilientSupabaseSignalStorage(cwd: string): SignalStorage {
 }
 
 export function createSignalStorage(cwd: string): SignalStorage {
-  if (!requireSupabaseSignals() || supabaseSignalsUnavailableReason) {
+  if (!requireSupabaseSignals()) {
+    if (requireDurableSupabaseStorage()) {
+      throw new Error("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required for durable signal storage");
+    }
     return createSqliteSignalStorage(cwd);
   }
+  if (requireDurableSupabaseStorage()) return createSupabaseSignalStorage();
+  if (supabaseSignalsUnavailableReason) return createSqliteSignalStorage(cwd);
   return createResilientSupabaseSignalStorage(cwd);
 }
