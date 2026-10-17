@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildSignalSnapshotCoverageSummary } from "./signal-coverage";
+import { buildSignalSnapshotCoverageSummary, loadSignalSnapshotCoverageSummary } from "./signal-coverage";
 import { buildSignalMarkdownExport } from "./signal-export";
 import {
   parseHypurrscanMarkdown,
@@ -94,6 +94,22 @@ test("durable signal storage fails closed without Supabase configuration", () =>
     if (previousRequired === undefined) delete process.env.REQUIRE_SUPABASE_STORAGE;
     else process.env.REQUIRE_SUPABASE_STORAGE = previousRequired;
   }
+});
+
+test("API coverage uses the persisted active registry", async () => {
+  const traders = [
+    { traderName: "Active", hypurrscanUrl: "https://example.com/active", walletAddress: "0x1111111111111111111111111111111111111111", isActive: true },
+    { traderName: "Inactive", hypurrscanUrl: "https://example.com/inactive", walletAddress: "0x2222222222222222222222222222222222222222", isActive: false },
+  ];
+  let requestedSnapshot = 0;
+  const coverage = await loadSignalSnapshotCoverageSummary({
+    getTrackedTraders: async () => traders,
+    getSignalTraderRuns: async (id) => { requestedSnapshot = id; return []; },
+  }, 136);
+  assert.equal(requestedSnapshot, 136);
+  assert.equal(coverage.trackedTotal, 1);
+  assert.equal(coverage.missingTrackedCount, 1);
+  assert.equal(coverage.missingTrackedTraders[0].traderName, "Active");
 });
 
 test("parseHypurrscanMarkdown extracts open perp positions", () => {

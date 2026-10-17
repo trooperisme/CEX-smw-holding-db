@@ -35,3 +35,17 @@ export function buildSignalSnapshotCoverageSummary(
     missingTrackedTraders,
   };
 }
+
+export async function loadSignalSnapshotCoverageSummary(
+  storage: {
+    getTrackedTraders(): Promise<TrackedTrader[]>;
+    getSignalTraderRuns(snapshotId: number): Promise<SignalTraderRunRecord[]>;
+  },
+  snapshotId: number,
+): Promise<SignalSnapshotCoverageSummary> {
+  const [traders, runs] = await Promise.all([
+    storage.getTrackedTraders(),
+    storage.getSignalTraderRuns(snapshotId),
+  ]);
+  return buildSignalSnapshotCoverageSummary(traders.filter((trader) => trader.isActive), runs);
+}

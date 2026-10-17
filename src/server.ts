@@ -7,7 +7,7 @@ import { buildClusters, diffClusters } from "./aggregator";
 import { runFullScan } from "./index";
 import { runQueuedScrapeJobs } from "./job-worker";
 import { resolveWorkspaceFilePath, resolveWorkspacePaths } from "./runtime-paths";
-import { buildSignalSnapshotCoverageSummary } from "./signal-coverage";
+import { loadSignalSnapshotCoverageSummary } from "./signal-coverage";
 import { buildSignalMarkdownExport } from "./signal-export";
 import { runSignalRefresh } from "./signal-refresh";
 import { createSignalStorage } from "./signal-storage";
@@ -410,9 +410,7 @@ async function buildSignalCoverageSummary(
   storage: ReturnType<typeof createSignalStorage>,
   snapshotId: number,
 ) {
-  const trackedTraders = loadTrackedTraders(cwd).filter((trader) => trader.isActive);
-  const runs = await storage.getSignalTraderRuns(snapshotId);
-  return buildSignalSnapshotCoverageSummary(trackedTraders, runs);
+  return loadSignalSnapshotCoverageSummary(storage, snapshotId);
 }
 
 app.use(express.json());
