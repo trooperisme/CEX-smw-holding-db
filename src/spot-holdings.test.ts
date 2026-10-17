@@ -48,8 +48,9 @@ test("runSpotHoldingsScan writes filtered spot export through injectable scrape 
           outputPath,
           `
             <div class="font-weight-bold mb-1">HYPE</div><div class="text-medium-emphasis">11.00$</div>
-            <div class="font-weight-bold mb-1">ARB</div><div class="text-medium-emphasis">12.00$</div>
-            <div class="font-weight-bold mb-1">LOW</div><div class="text-medium-emphasis">10.99$</div>
+            <div class="font-weight-bold mb-1">ARB</div><div class="text-medium-emphasis">333.01$</div>
+            <div class="font-weight-bold mb-1">BOUNDARY</div><div class="text-medium-emphasis">333.00$</div>
+            <div class="font-weight-bold mb-1">LOW</div><div class="text-medium-emphasis">332.99$</div>
             <div class="font-weight-bold mb-1">USDC</div><div class="text-medium-emphasis">10,000.00$</div>
           `,
           "utf-8",
@@ -60,7 +61,7 @@ test("runSpotHoldingsScan writes filtered spot export through injectable scrape 
     assert.equal(summary.tradersScanned, 1);
     assert.equal(summary.tradersWithFilteredHoldings, 1);
     assert.equal(summary.tokenFilter.filteredOut.stable, 1);
-    assert.deepEqual(summary.results[0].holdings.map((holding) => holding.token), ["ARB", "HYPE"]);
+    assert.deepEqual(summary.results[0].holdings.map((holding) => holding.token), ["ARB"]);
 
     const outputPath = path.join(
       tmpDir,
@@ -81,8 +82,8 @@ test("runSpotHoldingsScan writes filtered spot export through injectable scrape 
     assert.equal(fs.existsSync(outputPath), true);
     assert.equal(fs.existsSync(csvPath), true);
     const exported = JSON.parse(fs.readFileSync(outputPath, "utf-8"));
-    assert.equal(exported.minUsd, 11);
-    assert.deepEqual(exported.results[0].holdings.map((holding: { token: string }) => holding.token), ["ARB", "HYPE"]);
+    assert.equal(exported.minUsd, 333);
+    assert.deepEqual(exported.results[0].holdings.map((holding: { token: string }) => holding.token), ["ARB"]);
   } finally {
     if (previousRelevant === undefined) {
       delete process.env.SPOT_HOLDING_RELEVANT_TOKENS;

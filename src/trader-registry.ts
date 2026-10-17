@@ -38,7 +38,9 @@ function parseCsvLine(line: string): string[] {
 }
 
 function extractWalletAddress(url: string): string | null {
-  const match = String(url).trim().match(/\/address\/(0x[a-fA-F0-9]{40})(?:[/?#]|$)/);
+  const match = String(url)
+    .trim()
+    .match(/\/(?:address|vault)\/(0x[a-fA-F0-9]{40})(?:[/?#]|$)/);
   return match?.[1].toLowerCase() || null;
 }
 

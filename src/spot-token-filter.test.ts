@@ -27,5 +27,7 @@ test("spot token filter excludes stable and trash tokens", () => {
   const config = getSpotTokenFilterConfig({});
 
   assert.equal(classifySpotToken("USDC", config), "stable");
+  assert.equal(classifySpotToken("FEUSD", config), "stable");
+  assert.equal(classifySpotToken("USDT0", config), "stable");
   assert.equal(classifySpotToken("", config), "trash");
 });

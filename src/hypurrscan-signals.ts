@@ -8,9 +8,31 @@ type ScrapeHypurrscanOptions = {
   cwd: string;
   snapshotId: number;
   scrapeRunner?: FirecrawlScrapeRunner;
+  vaultPositionRunner?: HypurrscanVaultPositionRunner;
 };
 
 type FirecrawlScrapeRunner = (url: string, outputPath: string) => Promise<void>;
+
+type ParsedSignalPosition = {
+  token: string;
+  side: TraderPositionSide;
+  valueUsd: number;
+};
+
+type HypurrscanVaultPositionRunner = (
+  vaultAddress: string,
+  outputPath: string,
+) => Promise<ParsedSignalPosition[]>;
+
+type HypurrscanClearinghouseState = {
+  assetPositions?: Array<{
+    position?: {
+      coin?: string;
+      szi?: string | number;
+      positionValue?: string | number;
+    };
+  }>;
+};
 
 function parsePositiveInt(value: string | undefined, fallback: number): number {
   const parsed = Number(value);
@@ -81,11 +103,7 @@ function toSide(input: string): TraderPositionSide | null {
   return null;
 }
 
-function parsePerpsTable(markdown: string): Array<{
-  token: string;
-  side: TraderPositionSide;
-  valueUsd: number;
-}> {
+function parsePerpsTable(markdown: string): ParsedSignalPosition[] {
   const lines = markdown.split(/\r?\n/);
   const headerIndex = lines.findIndex((line) => line.includes("| Token | Side | Lev. | Value |"));
   if (headerIndex === -1) return [];
@@ -112,6 +130,36 @@ function parsePerpsTable(markdown: string): Array<{
   return positions;
 }
 
+export function parseHypurrscanVaultPositions(payload: unknown): ParsedSignalPosition[] {
+  const assetPositions = (payload as HypurrscanClearinghouseState | null)?.assetPositions;
+  if (!Array.isArray(assetPositions)) return [];
+
+  return assetPositions.flatMap((assetPosition) => {
+    const position = assetPosition?.position;
+    const token = cleanMarkdownCell(String(position?.coin || "")).replace(/-USD$/i, "").trim();
+    const signedSize = Number(position?.szi);
+    const valueUsd = parseCurrencyToNumber(String(position?.positionValue || ""));
+    if (!token || !Number.isFinite(signedSize) || signedSize === 0 || valueUsd === null || valueUsd <= 0) {
+      return [];
+    }
+
+    return [{
+      token,
+      side: signedSize < 0 ? "short" : "long",
+      valueUsd,
+    } satisfies ParsedSignalPosition];
+  });
+}
+
+function isHypurrscanVaultUrl(url: string): boolean {
+  return /https?:\/\/[^/]*hypurrscan\.io\/vault\/0x[a-fA-F0-9]{40}(?:[/?#]|$)/i.test(String(url || ""));
+}
+
+function extractHypurrscanVaultAddress(url: string): string | null {
+  const match = String(url || "").match(/\/vault\/(0x[a-fA-F0-9]{40})(?:[/?#]|$)/i);
+  return match?.[1].toLowerCase() || null;
+}
+
 function looksLikeEmptyHypurrscanMarkdown(markdown: string): boolean {
   const normalized = String(markdown || "");
   return (
@@ -126,6 +174,7 @@ function isRetriableScrapeError(error: unknown): boolean {
   const message = String((error as Error)?.message || error || "");
   return (
     /Firecrawl scrape failed \((?:408|409|425|429|5\d\d)\)/i.test(message) ||
+    /Hypurrscan vault scrape failed \((?:408|409|425|429|5\d\d)\)/i.test(message) ||
     /SCRAPE_ALL_ENGINES_FAILED/i.test(message) ||
     /Firecrawl returned empty markdown/i.test(message) ||
     /fetch failed|network|timeout|temporarily unavailable|ECONNRESET|ETIMEDOUT|EAI_AGAIN/i.test(message)
@@ -200,6 +249,31 @@ async function runFirecrawlScrape(url: string, outputPath: string): Promise<void
   fs.writeFileSync(outputPath, markdown, "utf-8");
 }
 
+async function runHypurrscanVaultPositions(
+  vaultAddress: string,
+  outputPath: string,
+): Promise<ParsedSignalPosition[]> {
+  // Hypurrscan's Vault > Positions tab uses this public Hyperliquid payload;
+  // call the same source directly because Firecrawl only sees the overview tab.
+  const timeoutMs = parsePositiveInt(process.env.HYPURRSCAN_VAULT_TIMEOUT_MS, 30000);
+  const response = await fetch("https://api.hyperliquid.xyz/info", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ type: "clearinghouseState", user: vaultAddress }),
+    signal: createTimeoutSignal(timeoutMs),
+  });
+
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Hypurrscan vault scrape failed (${response.status}): ${text}`);
+  }
+
+  const payload = (await response.json()) as HypurrscanClearinghouseState;
+  const positions = parseHypurrscanVaultPositions(payload);
+  fs.writeFileSync(outputPath.replace(/\.md$/i, ".json"), JSON.stringify(payload, null, 2), "utf-8");
+  return positions;
+}
+
 export async function scrapeHypurrscanSignals(
   trader: TrackedTrader,
   options: ScrapeHypurrscanOptions,
@@ -212,15 +286,41 @@ export async function scrapeHypurrscanSignals(
   const scrapeRetryCount = parsePositiveInt(process.env.HYPURRSCAN_SCRAPE_RETRY_COUNT, 6);
   const retryDelayMs = parsePositiveInt(process.env.HYPURRSCAN_RETRY_DELAY_MS, 1500);
   const scrapeRunner = options.scrapeRunner || runFirecrawlScrape;
+  const vaultPositionRunner = options.vaultPositionRunner || runHypurrscanVaultPositions;
+  const vaultAddress = extractHypurrscanVaultAddress(trader.hypurrscanUrl);
 
   let markdown = "";
-  let positions: Array<{
-    token: string;
-    side: TraderPositionSide;
-    valueUsd: number;
-  }> = [];
+  let positions: ParsedSignalPosition[] = [];
   let scrapeFailures = 0;
   let emptyResponses = 0;
+
+  if (isHypurrscanVaultUrl(trader.hypurrscanUrl) && vaultAddress) {
+    for (;;) {
+      try {
+        positions = await vaultPositionRunner(vaultAddress, outputPath);
+        break;
+      } catch (error) {
+        if (scrapeFailures >= scrapeRetryCount || !isRetriableScrapeError(error)) {
+          throw error;
+        }
+        scrapeFailures += 1;
+        const retryAfterMs = getRetryAfterMs(error);
+        await sleep(Math.max(retryDelayMs * scrapeFailures, retryAfterMs || 0));
+      }
+    }
+
+    return positions.map((position) => ({
+      traderName: trader.traderName,
+      walletAddress: trader.walletAddress,
+      sourceUrl: trader.hypurrscanUrl,
+      token: position.token,
+      side: position.side,
+      valueUsd: position.valueUsd,
+      marketType: classifySignalMarketType(position.token),
+      scrapedAt: new Date().toISOString(),
+      parseStatus: "parsed",
+    }));
+  }
 
   for (;;) {
     try {
@@ -258,10 +358,6 @@ export async function scrapeHypurrscanSignals(
   }));
 }
 
-export function parseHypurrscanMarkdown(markdown: string): Array<{
-  token: string;
-  side: TraderPositionSide;
-  valueUsd: number;
-}> {
+export function parseHypurrscanMarkdown(markdown: string): ParsedSignalPosition[] {
   return parsePerpsTable(markdown);
 }

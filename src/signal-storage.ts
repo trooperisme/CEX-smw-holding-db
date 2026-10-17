@@ -245,6 +245,7 @@ function createSupabaseSignalStorage(): SignalStorage {
       const { data, error } = await supabase
         .from("signal_snapshots")
         .select("id")
+        .in("status", ["success", "partial"])
         .order("id", { ascending: false })
         .limit(1)
         .maybeSingle();
@@ -388,12 +389,16 @@ function createSupabaseSignalStorage(): SignalStorage {
 }
 
 function createResilientSupabaseSignalStorage(cwd: string): SignalStorage {
-  const sqlite = createSqliteSignalStorage(cwd);
   const supabase = createSupabaseSignalStorage();
+  let sqlite: SignalStorage | null = null;
+  const getSqlite = (): SignalStorage => {
+    if (!sqlite) sqlite = createSqliteSignalStorage(cwd);
+    return sqlite;
+  };
 
-  const run = async <T>(operation: () => Promise<T>, fallback: () => Promise<T>): Promise<T> => {
+  const run = async <T>(operation: () => Promise<T>, fallback: (storage: SignalStorage) => Promise<T>): Promise<T> => {
     if (supabaseSignalsUnavailableReason) {
-      return fallback();
+      return fallback(getSqlite());
     }
 
     try {
@@ -403,51 +408,52 @@ function createResilientSupabaseSignalStorage(cwd: string): SignalStorage {
         throw error;
       }
       markSupabaseSignalsUnavailable(error);
-      return fallback();
+      return fallback(getSqlite());
     }
   };
 
   return {
     close() {
       supabase.close();
-      sqlite.close();
+      sqlite?.close();
+      sqlite = null;
     },
     replaceTrackedTraders: (traders) =>
-      run(() => supabase.replaceTrackedTraders(traders), () => sqlite.replaceTrackedTraders(traders)),
-    getTrackedTraders: () => run(() => supabase.getTrackedTraders(), () => sqlite.getTrackedTraders()),
+      run(() => supabase.replaceTrackedTraders(traders), (fallback) => fallback.replaceTrackedTraders(traders)),
+    getTrackedTraders: () => run(() => supabase.getTrackedTraders(), (fallback) => fallback.getTrackedTraders()),
     createSignalSnapshot: (totalTraders) =>
-      run(() => supabase.createSignalSnapshot(totalTraders), () => sqlite.createSignalSnapshot(totalTraders)),
+      run(() => supabase.createSignalSnapshot(totalTraders), (fallback) => fallback.createSignalSnapshot(totalTraders)),
     updateSignalSnapshot: (args) =>
-      run(() => supabase.updateSignalSnapshot(args), () => sqlite.updateSignalSnapshot(args)),
-    getSignalSnapshots: () => run(() => supabase.getSignalSnapshots(), () => sqlite.getSignalSnapshots()),
+      run(() => supabase.updateSignalSnapshot(args), (fallback) => fallback.updateSignalSnapshot(args)),
+    getSignalSnapshots: () => run(() => supabase.getSignalSnapshots(), (fallback) => fallback.getSignalSnapshots()),
     getLatestSignalSnapshotId: () =>
-      run(() => supabase.getLatestSignalSnapshotId(), () => sqlite.getLatestSignalSnapshotId()),
+      run(() => supabase.getLatestSignalSnapshotId(), (fallback) => fallback.getLatestSignalSnapshotId()),
     getSignalSnapshot: (snapshotId) =>
-      run(() => supabase.getSignalSnapshot(snapshotId), () => sqlite.getSignalSnapshot(snapshotId)),
+      run(() => supabase.getSignalSnapshot(snapshotId), (fallback) => fallback.getSignalSnapshot(snapshotId)),
     insertSignalTraderRun: (record) =>
-      run(() => supabase.insertSignalTraderRun(record), () => sqlite.insertSignalTraderRun(record)),
+      run(() => supabase.insertSignalTraderRun(record), (fallback) => fallback.insertSignalTraderRun(record)),
     updateSignalTraderRun: (runId, updates) =>
-      run(() => supabase.updateSignalTraderRun(runId, updates), () =>
-        sqlite.updateSignalTraderRun(runId, updates),
+      run(() => supabase.updateSignalTraderRun(runId, updates), (fallback) =>
+        fallback.updateSignalTraderRun(runId, updates),
       ),
     getSignalTraderRuns: (snapshotId) =>
-      run(() => supabase.getSignalTraderRuns(snapshotId), () => sqlite.getSignalTraderRuns(snapshotId)),
+      run(() => supabase.getSignalTraderRuns(snapshotId), (fallback) => fallback.getSignalTraderRuns(snapshotId)),
     insertTraderPositions: (snapshotId, positions) =>
-      run(() => supabase.insertTraderPositions(snapshotId, positions), () =>
-        sqlite.insertTraderPositions(snapshotId, positions),
+      run(() => supabase.insertTraderPositions(snapshotId, positions), (fallback) =>
+        fallback.insertTraderPositions(snapshotId, positions),
       ),
     getTraderPositions: (snapshotId) =>
-      run(() => supabase.getTraderPositions(snapshotId), () => sqlite.getTraderPositions(snapshotId)),
+      run(() => supabase.getTraderPositions(snapshotId), (fallback) => fallback.getTraderPositions(snapshotId)),
     replaceTokenSignalMetrics: (snapshotId, metrics) =>
-      run(() => supabase.replaceTokenSignalMetrics(snapshotId, metrics), () =>
-        sqlite.replaceTokenSignalMetrics(snapshotId, metrics),
+      run(() => supabase.replaceTokenSignalMetrics(snapshotId, metrics), (fallback) =>
+        fallback.replaceTokenSignalMetrics(snapshotId, metrics),
       ),
     getTokenSignalMetrics: (snapshotId, marketType) =>
-      run(() => supabase.getTokenSignalMetrics(snapshotId, marketType), () =>
-        sqlite.getTokenSignalMetrics(snapshotId, marketType),
+      run(() => supabase.getTokenSignalMetrics(snapshotId, marketType), (fallback) =>
+        fallback.getTokenSignalMetrics(snapshotId, marketType),
       ),
     getTokenDrilldown: (snapshotId, token) =>
-      run(() => supabase.getTokenDrilldown(snapshotId, token), () => sqlite.getTokenDrilldown(snapshotId, token)),
+      run(() => supabase.getTokenDrilldown(snapshotId, token), (fallback) => fallback.getTokenDrilldown(snapshotId, token)),
   };
 }
 

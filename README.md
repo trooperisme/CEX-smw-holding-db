@@ -117,6 +117,33 @@ New on-demand signals dashboard:
 - Open the app, log in, and use `Refresh Signals` to run a manual Hypurrscan scrape pass through Firecrawl.
 - The UI stores each manual run as a snapshot and lets you switch between `Crypto` and `TradFi`.
 
+Scheduled pre-market refresh:
+- The preferred scheduler is GitHub Actions via `.github/workflows/cex-scheduled-refresh.yml`.
+- Use `01:00 UTC` for an 08:00 Asia/Ho_Chi_Minh start, and schedule early enough to finish before the 09:00 desk review.
+- The worker writes a new snapshot through the same Firecrawl pipeline as the dashboard.
+- The dashboard keeps the newest `success` or `partial` snapshot as the published result while a new snapshot is still `running`.
+- Do not run the GitHub Actions scheduler and a Railway cron invocation at the same time; either choice must have one non-overlapping scheduler and Supabase enabled for durable snapshot history.
+
+### GitHub Actions scheduler
+
+The scheduled refresh runs from GitHub Actions using
+`.github/workflows/cex-scheduled-refresh.yml`. It runs at `01:00 UTC`
+(`08:00 GMT+7`) and can be started manually with `workflow_dispatch`.
+
+Configure these GitHub Actions Secrets before enabling the workflow:
+
+- `APP_USERNAME`
+- `APP_PASSWORD`
+- `FIRECRAWL_API_KEY`
+- `SUPABASE_URL`
+- `SUPABASE_SERVICE_ROLE_KEY`
+- `MAIN_APP_URL` (the authenticated Railway web-service URL used for spot refresh)
+
+Optional GitHub Actions Variables are `SIGNALS_REFRESH_CONCURRENCY`,
+`SPOT_HOLDING_CONCURRENCY`, `SPOT_HOLDING_MIN_USD`, and
+`SPOT_HOLDING_CACHE_TTL_HOURS`. The workflow builds the checked-out commit and
+fails unless the combined signal and spot refresh returns `success`.
+
 Manual sheet sync to Supabase:
 
 ```bash
@@ -174,7 +201,7 @@ Notes:
 - Use the Supabase project URL, not the Studio URL.
 - Use the `service_role` key, not the anon key, because the server writes snapshots, trader runs, and positions.
 - `FIRECRAWL_API_KEY` is still required for live Hypurrscan refreshes.
-- Spot holdings use Hypurrscan `#spot` pages. By default the Spot view keeps all non-stable/non-trash wallet-token holdings with value `>= $11`; set `SPOT_HOLDING_INCLUDE_TOKENS` only if you want to narrow the displayed token set.
+- Spot holdings use Hypurrscan `#spot` pages. By default the Spot view keeps all non-stable/non-trash wallet-token holdings with value `> $333`; set `SPOT_HOLDING_INCLUDE_TOKENS` only if you want to narrow the displayed token set.
 
 After the vars are set, restart or redeploy the Railway service. New refresh runs will write into Supabase automatically.
 

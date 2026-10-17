@@ -12,6 +12,8 @@
     "scan:headless": "HEADLESS=true ts-node src/index.ts",
     "sync:sheet": "ts-node src/sync-runner.ts",
     "jobs:run": "ts-node src/job-runner.ts",
+    "signals:scheduled": "node dist/src/signal-scheduled.js",
+    "signals:scheduled:dev": "ts-node src/signal-scheduled.ts",
     "scrape:direct": "ts-node src/direct-scrape.ts",
     "dashboard:export": "ts-node src/export-dashboard.ts",
     "claude-long:run": "ts-node src/claude-long.ts",

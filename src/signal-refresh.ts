@@ -13,7 +13,7 @@ type RunSignalRefreshOptions = {
   retryFailed?: boolean;
 };
 
-type RunSignalRefreshResult = {
+export type RunSignalRefreshResult = {
   snapshotId: number;
   tradersTotal: number;
   tradersCompleted: number;
@@ -89,7 +89,7 @@ export async function runSignalRefresh(
 ): Promise<RunSignalRefreshResult> {
   const cwd = options.cwd || process.cwd();
   const logger = options.logger || ((line: string) => console.log(line));
-  const concurrency = parseNum(process.env.SIGNALS_REFRESH_CONCURRENCY, 1);
+  const concurrency = parseNum(process.env.SIGNALS_REFRESH_CONCURRENCY, 4);
   const defaultBatchSize = process.env.VERCEL
     ? parseNum(process.env.SIGNALS_REFRESH_BATCH_SIZE, 4)
     : Number.POSITIVE_INFINITY;

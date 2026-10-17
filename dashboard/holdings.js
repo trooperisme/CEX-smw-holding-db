@@ -48,7 +48,6 @@ const perpsSortLabels = {
 const spotSortLabels = {
   holdersCount: "SMW Holders",
   totalValueUsd: "Total Value",
-  avgValueUsd: "Avg Holding",
   topHolderValueUsd: "Top Holder",
 };
 
@@ -168,13 +167,13 @@ function updateSpotSummary(payload) {
   const generatedAt = payload?.generatedAt || null;
   const rows = Array.isArray(payload?.rows) ? payload.rows : [];
   const status = generatedAt ? "ready" : "missing";
-  const minUsd = Number(summary.minUsd || 11);
+  const minUsd = Number(summary.minUsd || 333);
 
   els.summaryStatus.textContent = status.toUpperCase();
   els.summaryStatus.className = "pill";
   els.summaryStatus.classList.add(generatedAt ? "is-success" : "is-warning");
   els.summaryTraders.textContent = `${Number(summary.tradersScanned || 0)} traders`;
-  els.summaryPositions.textContent = `${Number(summary.keptHoldings || summary.relevantHoldings || 0)} spot holdings >= ${fmtUsd(minUsd)}`;
+  els.summaryPositions.textContent = `${Number(summary.keptHoldings || summary.relevantHoldings || 0)} spot holdings > ${fmtUsd(minUsd)}`;
   els.summaryZeroPositions.textContent = `${rows.length} non-stable tokens`;
 
   els.heroMeta.textContent = generatedAt
@@ -316,12 +315,6 @@ function renderSpotTableHead() {
       <th>
         <button class="sort-button" type="button" data-sort-key="totalValueUsd">
           <span>Total Value</span>
-          <span class="sort-indicator" aria-hidden="true">-</span>
-        </button>
-      </th>
-      <th>
-        <button class="sort-button" type="button" data-sort-key="avgValueUsd">
-          <span>Avg Holding</span>
           <span class="sort-indicator" aria-hidden="true">-</span>
         </button>
       </th>
@@ -497,11 +490,11 @@ function renderSpotTable() {
     Number(filteredOut.stable || 0) +
     Number(filteredOut.trash || 0) +
     Number(filteredOut.unrelated || 0);
-  const minUsd = Number(summary.minUsd || 11);
+  const minUsd = Number(summary.minUsd || 333);
 
   els.tableTitle.textContent = "Spot";
   els.tableSubtitle.textContent =
-    `Non-stable spot holdings >= ${fmtUsd(minUsd)} sorted by ${describeSort()}. ` +
+    `Non-stable spot holdings > ${fmtUsd(minUsd)} sorted by ${describeSort()}. ` +
     `${Number(summary.keptHoldings || summary.relevantHoldings || 0)} holdings kept; ${filteredCount} stable/trash/unrelated holdings filtered.`;
   els.tableStatus.textContent = `${rows.length} rows`;
   updateSortButtons();
@@ -509,9 +502,9 @@ function renderSpotTable() {
   if (!rows.length) {
     els.tableBody.innerHTML = `
       <tr>
-        <td colspan="5">
+        <td colspan="4">
           <div class="drilldown-panel">
-            <div class="empty-note">No non-stable spot holdings >= ${escapeHtml(fmtUsd(minUsd))} available. Refresh Spot to generate the dataset.</div>
+            <div class="empty-note">No non-stable spot holdings > ${escapeHtml(fmtUsd(minUsd))} available. Refresh Spot to generate the dataset.</div>
           </div>
         </td>
       </tr>
@@ -521,7 +514,6 @@ function renderSpotTable() {
 
   const maxHolders = maxMetric(rows, "holdersCount");
   const maxTotal = maxMetric(rows, "totalValueUsd");
-  const maxAvg = maxMetric(rows, "avgValueUsd");
   const maxTop = maxMetric(rows, "topHolderValueUsd");
 
   els.tableBody.innerHTML = rows
@@ -550,11 +542,6 @@ function renderSpotTable() {
             </div>
           </td>
           <td>
-            <div class="metric-value" style="--fill:${(Number(row.avgValueUsd || 0) / maxAvg) * 100}%">
-              <span>${escapeHtml(fmtUsd(row.avgValueUsd))}</span>
-            </div>
-          </td>
-          <td>
             <div class="metric-value" style="--fill:${(Number(row.topHolderValueUsd || 0) / maxTop) * 100}%">
               <span>${escapeHtml(row.topHolderName || "-")} · ${escapeHtml(fmtUsd(row.topHolderValueUsd))}</span>
             </div>
@@ -562,7 +549,7 @@ function renderSpotTable() {
         </tr>
         ${
           isOpen
-            ? `<tr class="drilldown-row"><td colspan="5">${buildSpotDrilldownCell(row)}</td></tr>`
+            ? `<tr class="drilldown-row"><td colspan="4">${buildSpotDrilldownCell(row)}</td></tr>`
             : ""
         }
       `;
@@ -603,9 +590,9 @@ async function loadSnapshotRows() {
     updateSpotSummary(payload);
     if (payload.generatedAt) {
       const filteredOut = payload.summary?.filteredOut || {};
-      const minUsd = Number(payload.summary?.minUsd || 11);
+      const minUsd = Number(payload.summary?.minUsd || 333);
       setBanner(
-        `Spot filter kept ${Number(payload.summary?.keptHoldings || payload.summary?.relevantHoldings || 0)} non-stable holdings >= ${fmtUsd(minUsd)}. Filtered out stable=${Number(filteredOut.stable || 0)}, trash=${Number(filteredOut.trash || 0)}, unrelated=${Number(filteredOut.unrelated || 0)}.`,
+        `Spot filter kept ${Number(payload.summary?.keptHoldings || payload.summary?.relevantHoldings || 0)} non-stable holdings > ${fmtUsd(minUsd)}. Filtered out stable=${Number(filteredOut.stable || 0)}, trash=${Number(filteredOut.trash || 0)}, unrelated=${Number(filteredOut.unrelated || 0)}.`,
         "info",
       );
     } else {

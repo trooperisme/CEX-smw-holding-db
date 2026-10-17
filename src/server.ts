@@ -11,7 +11,7 @@ import { buildSignalSnapshotCoverageSummary } from "./signal-coverage";
 import { buildSignalMarkdownExport } from "./signal-export";
 import { runSignalRefresh } from "./signal-refresh";
 import { createSignalStorage } from "./signal-storage";
-import { runSpotHoldingsScan } from "./spot-holdings";
+import { getSpotHoldingMinUsd, runSpotHoldingsScan } from "./spot-holdings";
 import { classifySpotToken, getSpotTokenFilterConfig, normalizeSpotTokenSymbol } from "./spot-token-filter";
 import { createStorage } from "./storage";
 import { runSheetSyncToSupabase } from "./sync";
@@ -182,6 +182,7 @@ function getSpotHoldingsOutputPath() {
 
 function loadSpotHoldingsDashboard() {
   const outputPath = getSpotHoldingsOutputPath();
+  const minUsd = getSpotHoldingMinUsd();
   if (!fs.existsSync(outputPath)) {
     return {
       generatedAt: null,
@@ -190,7 +191,7 @@ function loadSpotHoldingsDashboard() {
         tradersScanned: 0,
         tradersWithRelevantHoldings: 0,
         failures: 0,
-        minUsd: 11,
+        minUsd,
         rawHoldings: 0,
         keptHoldings: 0,
         relevantHoldings: 0,
@@ -249,14 +250,15 @@ function loadSpotHoldingsDashboard() {
     for (const holding of trader.holdings || []) {
       rawHoldings += 1;
       const token = normalizeSpotTokenSymbol(String(holding.token || ""));
+      const valueUsd = Number(holding.valueUsd || 0);
+      if (!Number.isFinite(valueUsd) || valueUsd <= minUsd) continue;
+
       const category = classifySpotToken(token, filterConfig);
       if (category !== "displayable") {
         filteredOut[category] += 1;
         continue;
       }
 
-      const valueUsd = Number(holding.valueUsd || 0);
-      if (!Number.isFinite(valueUsd) || valueUsd <= 0) continue;
       keptHoldings += 1;
 
       const entry =
@@ -306,7 +308,7 @@ function loadSpotHoldingsDashboard() {
       tradersScanned: Number(payload.tradersScanned || 0),
       tradersWithRelevantHoldings: rows.reduce((count, row) => count + row.holdersCount, 0),
       failures: Number(payload.failures || 0),
-      minUsd: payload.minUsd ?? 11,
+      minUsd,
       rawHoldings,
       keptHoldings,
       relevantHoldings: keptHoldings,

@@ -67,9 +67,15 @@ type RunSpotHoldingsScanOptions = {
   scrapeRunner?: SpotScrapeRunner;
 };
 
+export const DEFAULT_SPOT_HOLDING_MIN_USD = 333;
+
 function parsePositiveNumber(value: string | undefined, fallback: number): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+export function getSpotHoldingMinUsd(env: NodeJS.ProcessEnv = process.env): number {
+  return parsePositiveNumber(env.SPOT_HOLDING_MIN_USD, DEFAULT_SPOT_HOLDING_MIN_USD);
 }
 
 function parsePositiveInt(value: string | undefined, fallback: number): number {
@@ -325,7 +331,7 @@ export async function runSpotHoldingsScan(
   const paths = resolveWorkspacePaths(cwd);
   const traders = options.traders || loadTrackedTraders(cwd);
   const concurrency = Math.max(1, Math.floor(parsePositiveNumber(process.env.SPOT_HOLDING_CONCURRENCY, 4)));
-  const minUsd = parsePositiveNumber(process.env.SPOT_HOLDING_MIN_USD, 11);
+  const minUsd = getSpotHoldingMinUsd();
   const forceRefetch = String(process.env.SPOT_HOLDING_FORCE_REFETCH || "").trim() === "1";
   const cacheTtlHours = parsePositiveNumber(process.env.SPOT_HOLDING_CACHE_TTL_HOURS, 6);
   const filterConfig = getSpotTokenFilterConfig();
@@ -357,7 +363,7 @@ export async function runSpotHoldingsScan(
       }
       const html = fs.readFileSync(htmlPath, "utf-8");
       const holdings = parseSpotHoldingsFromHtml(html)
-        .filter((holding) => holding.valueUsd >= minUsd)
+        .filter((holding) => holding.valueUsd > minUsd)
         .map((holding) => ({
           ...holding,
           token: normalizeSpotTokenSymbol(holding.token),

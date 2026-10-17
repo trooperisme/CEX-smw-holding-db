@@ -668,7 +668,11 @@ export function createStorage(cwd: string) {
     },
     getLatestSignalSnapshotId(): number | null {
       const row = db
-        .prepare(`SELECT id FROM signal_snapshots ORDER BY id DESC LIMIT 1`)
+        .prepare(
+          `SELECT id FROM signal_snapshots
+           WHERE status IN ('success', 'partial')
+           ORDER BY id DESC LIMIT 1`,
+        )
         .get() as { id: number } | undefined;
       return row?.id ?? null;
     },

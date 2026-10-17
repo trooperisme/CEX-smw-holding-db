@@ -5,16 +5,36 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { buildSignalSnapshotCoverageSummary } from "./signal-coverage";
 import { buildSignalMarkdownExport } from "./signal-export";
-import { parseHypurrscanMarkdown, scrapeHypurrscanSignals } from "./hypurrscan-signals";
+import {
+  parseHypurrscanMarkdown,
+  parseHypurrscanVaultPositions,
+  scrapeHypurrscanSignals,
+} from "./hypurrscan-signals";
 import { summarizeSignalRefreshProgress } from "./signal-refresh";
 import { aggregateTokenSignalMetrics } from "./signals";
 import { classifySignalMarketType, loadTrackedTraders } from "./trader-registry";
+import { createSignalStorage } from "./signal-storage";
 
 test("classifySignalMarketType routes prefixed tickers to tradfi", () => {
   assert.equal(classifySignalMarketType("BTC"), "crypto");
   assert.equal(classifySignalMarketType("HYPE"), "crypto");
   assert.equal(classifySignalMarketType("xyz:EWY"), "tradfi");
   assert.equal(classifySignalMarketType("hyna:HYPE"), "tradfi");
+});
+
+test("latest signal snapshot ignores a running snapshot", async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "signals-latest-snapshot-"));
+  const storage = createSignalStorage(tmpDir);
+  try {
+    const publishedId = await storage.createSignalSnapshot(1);
+    await storage.updateSignalSnapshot({ id: publishedId, status: "success", finishedAt: new Date().toISOString() });
+    const runningId = await storage.createSignalSnapshot(1);
+
+    assert.ok(runningId > publishedId);
+    assert.equal(await storage.getLatestSignalSnapshotId(), publishedId);
+  } finally {
+    storage.close();
+  }
 });
 
 test("parseHypurrscanMarkdown extracts open perp positions", () => {
@@ -30,6 +50,69 @@ test("parseHypurrscanMarkdown extracts open perp positions", () => {
     { token: "BTC", side: "long", valueUsd: 8058669.07 },
     { token: "xyz:CL", side: "long", valueUsd: 576852.72 },
     { token: "XRP", side: "short", valueUsd: 77108.48 },
+  ]);
+});
+
+test("parseHypurrscanVaultPositions mirrors Hypurrscan Positions tab payload", () => {
+  assert.deepEqual(
+    parseHypurrscanVaultPositions({
+      assetPositions: [
+        { position: { coin: "BTC", szi: "48.98793", positionValue: "4128310.83696" } },
+        { position: { coin: "SOL", szi: "-540.67", positionValue: "64237.0027" } },
+        { position: { coin: "ZERO", szi: "0", positionValue: "0" } },
+      ],
+    }),
+    [
+      { token: "BTC", side: "long", valueUsd: 4128310.83696 },
+      { token: "SOL", side: "short", valueUsd: 64237.0027 },
+    ],
+  );
+});
+
+test("scrapeHypurrscanSignals uses the vault Positions data path", async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "signals-vault-positions-"));
+  const calls: string[] = [];
+  const positions = await scrapeHypurrscanSignals(
+    {
+      traderName: "bredo strategy",
+      hypurrscanUrl: "https://hypurrscan.io/vault/0x654016a8c9fcf0c4cb7ed6078aba21f7f399f7b7",
+      walletAddress: "0x654016a8c9fcf0c4cb7ed6078aba21f7f399f7b7",
+      isActive: true,
+    },
+    {
+      cwd: tmpDir,
+      snapshotId: 8,
+      vaultPositionRunner: async (vaultAddress, outputPath) => {
+        calls.push(`${vaultAddress}:${outputPath.endsWith(".md")}`);
+        return [
+          { token: "BTC", side: "long", valueUsd: 4128310.83696 },
+          { token: "LINK", side: "long", valueUsd: 1472839.0266 },
+        ];
+      },
+    },
+  );
+
+  assert.deepEqual(calls, [
+    "0x654016a8c9fcf0c4cb7ed6078aba21f7f399f7b7:true",
+  ]);
+  assert.deepEqual(positions.map(({ token, side, valueUsd, sourceUrl }) => ({
+    token,
+    side,
+    valueUsd,
+    sourceUrl,
+  })), [
+    {
+      token: "BTC",
+      side: "long",
+      valueUsd: 4128310.83696,
+      sourceUrl: "https://hypurrscan.io/vault/0x654016a8c9fcf0c4cb7ed6078aba21f7f399f7b7",
+    },
+    {
+      token: "LINK",
+      side: "long",
+      valueUsd: 1472839.0266,
+      sourceUrl: "https://hypurrscan.io/vault/0x654016a8c9fcf0c4cb7ed6078aba21f7f399f7b7",
+    },
   ]);
 });
 
