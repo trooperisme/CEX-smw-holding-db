@@ -10,7 +10,7 @@ import {
   parseHypurrscanVaultPositions,
   scrapeHypurrscanSignals,
 } from "./hypurrscan-signals";
-import { summarizeSignalRefreshProgress } from "./signal-refresh";
+import { runSignalRefresh, summarizeSignalRefreshProgress } from "./signal-refresh";
 import { aggregateTokenSignalMetrics } from "./signals";
 import { classifySignalMarketType, loadTrackedTraders } from "./trader-registry";
 import { createSignalStorage } from "./signal-storage";
@@ -37,6 +37,39 @@ test("latest signal snapshot ignores unpublished snapshots", async () => {
     assert.equal(await storage.getLatestSignalSnapshotId(), publishedId);
   } finally {
     storage.close();
+  }
+});
+
+test("scheduled signal input does not replace the persisted tracked trader registry", async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "signals-registry-preservation-"));
+  const savedUrl = process.env.SUPABASE_URL;
+  const savedKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  const savedRequired = process.env.REQUIRE_SUPABASE_STORAGE;
+  delete process.env.SUPABASE_URL;
+  delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+  delete process.env.REQUIRE_SUPABASE_STORAGE;
+  const stored = { traderName: "Stored", hypurrscanUrl: "https://hypurrscan.io/address/0x1111111111111111111111111111111111111111", walletAddress: "0x1111111111111111111111111111111111111111", isActive: true };
+  const input = { traderName: "Input", hypurrscanUrl: "https://hypurrscan.io/address/0x2222222222222222222222222222222222222222", walletAddress: "0x2222222222222222222222222222222222222222", isActive: true };
+  try {
+    const storage = createSignalStorage(tmpDir);
+    await storage.replaceTrackedTraders([stored]);
+    storage.close();
+    await runSignalRefresh({ cwd: tmpDir, traders: [input], replaceTrackedTraders: false, maxTraders: 0, logger: () => undefined });
+    const emptyResult = await runSignalRefresh({
+      cwd: tmpDir, traders: [input], replaceTrackedTraders: false, requireNonemptyOutput: true,
+      scrapeRunner: async () => [], logger: () => undefined,
+    });
+    assert.equal(emptyResult.status, "partial");
+    const check = createSignalStorage(tmpDir);
+    try {
+      assert.deepEqual(await check.getTrackedTraders(), [stored]);
+      assert.equal(await check.getLatestSignalSnapshotId(), null);
+    }
+    finally { check.close(); }
+  } finally {
+    if (savedUrl === undefined) delete process.env.SUPABASE_URL; else process.env.SUPABASE_URL = savedUrl;
+    if (savedKey === undefined) delete process.env.SUPABASE_SERVICE_ROLE_KEY; else process.env.SUPABASE_SERVICE_ROLE_KEY = savedKey;
+    if (savedRequired === undefined) delete process.env.REQUIRE_SUPABASE_STORAGE; else process.env.REQUIRE_SUPABASE_STORAGE = savedRequired;
   }
 });
 

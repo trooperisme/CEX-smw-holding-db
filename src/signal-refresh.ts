@@ -9,6 +9,9 @@ type RunSignalRefreshOptions = {
   logger?: ScanLogger;
   snapshotId?: number;
   traders?: TrackedTrader[];
+  replaceTrackedTraders?: boolean;
+  requireNonemptyOutput?: boolean;
+  scrapeRunner?: typeof scrapeHypurrscanSignals;
   maxTraders?: number;
   retryFailed?: boolean;
 };
@@ -102,7 +105,7 @@ export async function runSignalRefresh(
   try {
     const traders = (options.traders || loadTrackedTraders(cwd)).filter((trader) => trader.isActive);
 
-    if (options.traders) {
+    if (options.traders && options.replaceTrackedTraders !== false) {
       await storage.replaceTrackedTraders(traders);
     }
 
@@ -144,7 +147,7 @@ export async function runSignalRefresh(
       });
 
       try {
-        const positions = await scrapeHypurrscanSignals(trader, {
+        const positions = await (options.scrapeRunner || scrapeHypurrscanSignals)(trader, {
           cwd,
           snapshotId: snapshotId as number,
         });
@@ -211,7 +214,7 @@ export async function runSignalRefresh(
         ? "running"
         : completed === 0 && failed > 0
           ? "failed"
-          : failed > 0
+          : failed > 0 || (options.requireNonemptyOutput && totalPositions === 0)
             ? "partial"
             : "success";
 
@@ -221,7 +224,11 @@ export async function runSignalRefresh(
       tradersCompleted: completed,
       tradersFailed: failed,
       totalPositions,
-      errorMessage: status === "failed" ? "All trader scrapes failed" : null,
+      errorMessage: status === "failed"
+        ? "All trader scrapes failed"
+        : options.requireNonemptyOutput && totalPositions === 0
+          ? "Signal scan produced no positions"
+          : null,
       finishedAt: status === "running" ? null : new Date().toISOString(),
     });
 

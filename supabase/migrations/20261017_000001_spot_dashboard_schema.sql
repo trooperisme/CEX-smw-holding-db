@@ -45,3 +45,9 @@ create index if not exists idx_spot_trader_runs_snapshot
 
 create index if not exists idx_spot_holdings_snapshot_token
   on public.spot_holdings (snapshot_id, token, value_usd desc);
+
+-- The app accesses these tables only through the server-side service role.
+-- Keep unauthenticated PostgREST clients from reading or modifying snapshots.
+alter table public.spot_snapshots enable row level security;
+alter table public.spot_trader_runs enable row level security;
+alter table public.spot_holdings enable row level security;
