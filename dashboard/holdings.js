@@ -34,6 +34,7 @@ const state = {
   spotSummary: null,
   spotGeneratedAt: null,
   copyRunning: false,
+  readOnlyHosted: false,
 };
 
 const MAX_VISIBLE_SNAPSHOTS = 5;
@@ -172,18 +173,20 @@ function updateSpotSummary(payload) {
   els.summaryStatus.textContent = status.toUpperCase();
   els.summaryStatus.className = "pill";
   els.summaryStatus.classList.add(generatedAt ? "is-success" : "is-warning");
-  els.summaryTraders.textContent = `${Number(summary.tradersScanned || 0)} traders`;
-  els.summaryPositions.textContent = `${Number(summary.keptHoldings || summary.relevantHoldings || 0)} spot holdings > ${fmtUsd(minUsd)}`;
-  els.summaryZeroPositions.textContent = `${rows.length} non-stable tokens`;
+  els.summaryTraders.textContent = generatedAt ? `${Number(summary.tradersScanned || 0)} traders` : "— traders";
+  els.summaryPositions.textContent = generatedAt ? `${Number(summary.keptHoldings || summary.relevantHoldings || 0)} spot holdings > ${fmtUsd(minUsd)}` : "— spot holdings";
+  els.summaryZeroPositions.textContent = generatedAt ? `${rows.length} non-stable tokens` : "— non-stable tokens";
 
   els.heroMeta.textContent = generatedAt
     ? `${fmtDate(generatedAt)} · Spot holdings ready`
-    : "No spot holdings export yet. Refresh Spot to generate the dataset.";
+    : "No completed spot holdings snapshot yet.";
 }
 
 function updateCopyButton() {
   if (els.refreshButton) {
-    els.refreshButton.textContent = state.refreshRunning
+    els.refreshButton.textContent = state.readOnlyHosted
+      ? "Scheduled at 08:00 GMT+7"
+      : state.refreshRunning
       ? "Refreshing..."
       : isSpotView()
         ? "Refresh Spot"
@@ -493,6 +496,13 @@ function renderSpotTable() {
   const minUsd = Number(summary.minUsd || 333);
 
   els.tableTitle.textContent = "Spot";
+  if (!state.spotGeneratedAt) {
+    els.tableSubtitle.textContent = "No completed spot snapshot available yet.";
+    els.tableStatus.textContent = "Awaiting snapshot";
+    updateSortButtons();
+    els.tableBody.innerHTML = '<tr><td colspan="4"><div class="drilldown-panel"><div class="empty-note">No completed spot snapshot available yet.</div></div></td></tr>';
+    return;
+  }
   els.tableSubtitle.textContent =
     `Non-stable spot holdings > ${fmtUsd(minUsd)} sorted by ${describeSort()}. ` +
     `${Number(summary.keptHoldings || summary.relevantHoldings || 0)} holdings kept; ${filteredCount} stable/trash/unrelated holdings filtered.`;
@@ -596,7 +606,9 @@ async function loadSnapshotRows() {
         "info",
       );
     } else {
-      setBanner("No spot export found. Click Refresh Signals while Spot is selected to generate it.", "warning");
+      setBanner(state.readOnlyHosted
+        ? "No completed Spot snapshot yet. The next GitHub Actions scan will populate it if it passes the quality checks."
+        : "No completed Spot snapshot yet. Refresh Spot to generate it.", "warning");
     }
     renderTable();
     updateCopyButton();
@@ -676,6 +688,7 @@ async function copySignalExport() {
 async function loadInitialData() {
   try {
     const health = await fetchJson("/api/health");
+    state.readOnlyHosted = Boolean(health.readOnly);
     if (health.readOnly && els.refreshButton) {
       els.refreshButton.disabled = true;
       els.refreshButton.textContent = "Scheduled at 08:00 GMT+7";
