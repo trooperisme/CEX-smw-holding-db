@@ -14,6 +14,7 @@
     "jobs:run": "ts-node src/job-runner.ts",
     "signals:scheduled": "node dist/src/signal-scheduled.js",
     "signals:scheduled:dev": "ts-node src/signal-scheduled.ts",
+    "signals:registry:sync": "node dist/src/signal-registry-sync.js",
     "scrape:direct": "ts-node src/direct-scrape.ts",
     "dashboard:export": "ts-node src/export-dashboard.ts",
     "claude-long:run": "ts-node src/claude-long.ts",

@@ -2,7 +2,7 @@ name: CEX scheduled refresh
 
 on:
   schedule:
-    # GitHub Actions uses UTC. 01:00 UTC is 08:00 GMT+7.
+    # GitHub Actions uses UTC. The daily pass targets 08:00 GMT+7.
     - cron: "0 1 * * *"
   workflow_dispatch:
 
@@ -35,6 +35,13 @@ jobs:
 
       - name: Build scheduler
         run: npm run build
+
+      - name: Sync tracked trader registry
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          REQUIRE_SUPABASE_STORAGE: "1"
+        run: npm run signals:registry:sync
 
       - name: Run scheduled refresh
         env:
