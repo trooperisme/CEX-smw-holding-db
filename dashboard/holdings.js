@@ -38,6 +38,8 @@ const state = {
   orderDashboard: null,
   orderDetails: new Map(),
   openOrderAsset: null,
+  orderSortKey: "net",
+  orderSortDir: "desc",
 };
 
 const MAX_VISIBLE_SNAPSHOTS = 5;
@@ -191,23 +193,20 @@ function updateSpotSummary(payload) {
 
 function updateCopyButton() {
   if (els.refreshButton) {
-    els.refreshButton.textContent = state.readOnlyHosted
+    els.refreshButton.textContent = isOrderView()
+      ? "Scheduled order scan"
+      : state.readOnlyHosted
       ? "Scheduled at 08:00 GMT+7"
       : state.refreshRunning
       ? "Refreshing..."
       : isSpotView()
         ? "Refresh Spot"
         : "Refresh Signals";
+    els.refreshButton.disabled = state.readOnlyHosted || state.refreshRunning || isOrderView();
   }
   if (!els.copyButton) return;
   els.copyButton.disabled = isSpotView() || isOrderView() || !state.selectedSnapshotId || state.copyRunning;
   els.copyButton.textContent = state.copyRunning ? "Copying..." : "Copy";
-}
-
-function formatDelta(value) {
-  const numeric = Number(value || 0);
-  const prefix = numeric > 0 ? "+" : numeric < 0 ? "−" : "";
-  return `${prefix}${fmtUsd(Math.abs(numeric))}`;
 }
 
 function setOrderControls(active) {
@@ -239,6 +238,42 @@ function orderSignal(row) {
   return "Two-sided repricing";
 }
 
+const orderSortLabels = {
+  bidNotional: "Live bids",
+  askNotional: "Live asks",
+  net: "Delta",
+  wallets: "Actors",
+};
+
+function orderNet(row) {
+  const difference = Number(row.bidNotional || 0) - Number(row.askNotional || 0);
+  return {
+    amount: Math.abs(difference),
+    side: difference > 0 ? "bid" : difference < 0 ? "ask" : "even",
+    label: difference > 0 ? "Bid leads" : difference < 0 ? "Ask leads" : "Balanced",
+  };
+}
+
+function orderSortValue(row, key) {
+  return key === "net" ? orderNet(row).amount : Number(row[key] || 0);
+}
+
+function sortedOrderRows(rows) {
+  const direction = state.orderSortDir === "asc" ? 1 : -1;
+  return [...rows].sort((left, right) => {
+    const difference = orderSortValue(left, state.orderSortKey) - orderSortValue(right, state.orderSortKey);
+    return difference !== 0
+      ? difference * direction
+      : String(left.displayName || left.asset).localeCompare(String(right.displayName || right.asset));
+  });
+}
+
+function orderSortButton(key) {
+  const active = state.orderSortKey === key;
+  const arrow = active ? (state.orderSortDir === "desc" ? "↓" : "↑") : "↕";
+  return `<button class="order-sort-button ${active ? "is-active" : ""}" type="button" data-order-sort="${key}" aria-label="Sort by ${orderSortLabels[key]}${active ? `, ${state.orderSortDir === "desc" ? "descending" : "ascending"}` : ""}" aria-pressed="${active}">${orderSortLabels[key]} <span aria-hidden="true">${arrow}</span></button>`;
+}
+
 function buildOrderLadder(orders, side) {
   const max = Math.max(...orders.map((order) => Number(order.notional || 0)), 1);
   return orders.length
@@ -255,12 +290,15 @@ function buildOrderLadder(orders, side) {
 function buildOrderDetail(asset) {
   const detail = state.orderDetails.get(asset);
   if (!detail) return '<div class="order-detail-loading">Loading exact price ladder…</div>';
-  const walletRows = (detail.wallets || []).slice(0, 8).map((wallet) => `
-    <a class="order-wallet-row" href="${escapeHtml(wallet.sourceUrl)}" target="_blank" rel="noreferrer">
-      <span><strong>${escapeHtml(wallet.traderName)}</strong><small>${escapeHtml(shortWallet(wallet.walletAddress))} · ${escapeHtml(wallet.side)}</small></span>
-      <span>${escapeHtml(fmtUsd(wallet.notional))}<small>${wallet.orders} orders · ${wallet.minPrice}–${wallet.maxPrice}</small></span>
-    </a>
-  `).join("");
+  const walletRows = (detail.wallets || []).slice(0, 8).map((wallet) => {
+    const side = wallet.side === "bid" ? "bid" : wallet.side === "ask" ? "ask" : "even";
+    return `
+      <a class="order-wallet-row order-wallet-row--${side}" href="${escapeHtml(wallet.sourceUrl)}" target="_blank" rel="noreferrer">
+        <span><strong>${escapeHtml(wallet.traderName)}</strong><small>${escapeHtml(shortWallet(wallet.walletAddress))} <em class="order-side-tag">${escapeHtml(side)}</em></small></span>
+        <span><strong>${escapeHtml(fmtUsd(wallet.notional))}</strong><small>${wallet.orders} ${Number(wallet.orders) === 1 ? "order" : "orders"} · ${wallet.minPrice}–${wallet.maxPrice}</small></span>
+      </a>
+    `;
+  }).join("");
   return `
     <section class="order-detail-grid">
       <div class="ladder-card ladder-card--bid"><h3>Bid ladder</h3>${buildOrderLadder(detail.bids || [], "bid")}</div>
@@ -273,9 +311,11 @@ function buildOrderDetail(asset) {
 function renderOrderTable() {
   const payload = state.orderDashboard;
   const rows = Array.isArray(payload?.assets) ? payload.assets : [];
+  const sortedRows = sortedOrderRows(rows);
   const overview = payload?.overview || {};
+  const hasPrevious = Boolean(payload?.snapshot?.previousFetchedAt);
   els.tableTitle.textContent = "Order Intent";
-  els.tableSubtitle.textContent = "Ranked by change versus the prior native snapshot. Limit orders are conditional liquidity, not holdings, fills, or guaranteed directional conviction.";
+  els.tableSubtitle.textContent = `Sorted by ${orderSortLabels[state.orderSortKey]} (${state.orderSortDir === "desc" ? "high to low" : "low to high"}). Delta is the absolute USD gap between live bids and asks; the color marks the larger side. Limit orders are conditional liquidity, not fills.`;
   els.tableStatus.textContent = `${rows.length} native assets`;
   els.tableHead.innerHTML = "";
   els.tableHead.closest("table")?.classList.add("order-intent-table");
@@ -283,34 +323,44 @@ function renderOrderTable() {
     els.tableBody.innerHTML = '<tr><td><div class="drilldown-panel"><div class="empty-note">No open-order data available.</div></div></td></tr>';
     return;
   }
-  const highlights = rows.slice(0, 4).map((row) => `
-    <button class="intent-highlight" type="button" data-order-asset="${escapeHtml(row.asset)}">
-      <span>${escapeHtml(row.displayName)} <small>${escapeHtml(row.asset)}</small></span>
-      <strong>${escapeHtml(orderSignal(row))}</strong>
-      <em>${escapeHtml(formatDelta(row.deltaBid + row.deltaAsk))}</em>
-    </button>
-  `).join("");
+  const highlights = [...rows]
+    .sort((left, right) => hasPrevious
+      ? Number(right.changeScore || 0) - Number(left.changeScore || 0)
+      : Number(right.bidNotional || 0) + Number(right.askNotional || 0) - Number(left.bidNotional || 0) - Number(left.askNotional || 0))
+    .slice(0, 4)
+    .map((row) => {
+      const net = orderNet(row);
+      const signal = hasPrevious ? orderSignal(row) : net.label;
+      const tone = hasPrevious ? "even" : net.side;
+      return `
+        <button class="intent-highlight intent-highlight--${tone}" type="button" data-order-asset="${escapeHtml(row.asset)}">
+          <span>${escapeHtml(row.displayName)}${row.displayName !== row.asset ? ` <small>${escapeHtml(row.asset)}</small>` : ""}</span>
+          <strong>${escapeHtml(signal)}</strong>
+          <em>${escapeHtml(hasPrevious ? fmtUsd(row.changeScore) : fmtUsd(Number(row.bidNotional || 0) + Number(row.askNotional || 0)))}</em>
+        </button>
+      `;
+    }).join("");
   els.tableBody.innerHTML = `
     <tr class="order-summary-row"><td>
       <section class="intent-kpis">
-        <article><span>Live bid intent</span><strong>${escapeHtml(fmtUsd(overview.bidNotional))}</strong><small>Conditional buy liquidity now</small></article>
-        <article><span>Live ask intent</span><strong>${escapeHtml(fmtUsd(overview.askNotional))}</strong><small>Conditional sell liquidity now</small></article>
-        <article><span>Order churn</span><strong>${Number(overview.addedOrders || 0).toLocaleString()} / ${Number(overview.cancelledOrders || 0).toLocaleString()}</strong><small>added / cancelled orders</small></article>
+        <article class="intent-kpi intent-kpi--bid"><span>Live bid intent</span><strong>${escapeHtml(fmtUsd(overview.bidNotional))}</strong><small>Conditional buy liquidity now</small></article>
+        <article class="intent-kpi intent-kpi--ask"><span>Live ask intent</span><strong>${escapeHtml(fmtUsd(overview.askNotional))}</strong><small>Conditional sell liquidity now</small></article>
       </section>
-      <section class="intent-highlights"><div class="intent-section-label">Largest intent shifts</div>${highlights}</section>
+      <section class="intent-highlights"><div class="intent-section-label">${hasPrevious ? "Largest intent shifts" : "Largest live intent"}</div><div class="intent-highlight-grid">${highlights}</div></section>
       <div class="intent-section-label">Token radar</div>
     </td></tr>
-    <tr class="order-column-head"><td><div class="order-grid order-grid--head"><span>Asset / signal</span><span>Live bids</span><span>Live asks</span><span>Delta</span><span>Actors</span></div></td></tr>
-    ${rows.map((row) => {
+    <tr class="order-column-head"><td><div class="order-grid order-grid--head"><span>Asset / signal</span>${orderSortButton("bidNotional")}${orderSortButton("askNotional")}${orderSortButton("net")}${orderSortButton("wallets")}</div></td></tr>
+    ${sortedRows.map((row) => {
       const open = state.openOrderAsset === row.asset;
+      const net = orderNet(row);
       return `
         <tr class="order-row ${open ? "is-open" : ""}" data-order-asset="${escapeHtml(row.asset)}"><td>
           <button class="order-grid order-grid--row" type="button" data-order-asset="${escapeHtml(row.asset)}">
-            <span class="order-asset"><b>${escapeHtml(row.displayName)}</b><small>${escapeHtml(row.asset)} · ${escapeHtml(orderSignal(row))}</small></span>
-            <span>${escapeHtml(fmtUsd(row.bidNotional))}<small>${row.bidMin ?? "—"}–${row.bidMax ?? "—"}</small></span>
-            <span>${escapeHtml(fmtUsd(row.askNotional))}<small>${row.askMin ?? "—"}–${row.askMax ?? "—"}</small></span>
-            <span class="${row.deltaBid + row.deltaAsk >= 0 ? "positive" : "negative"}">${escapeHtml(formatDelta(row.deltaBid + row.deltaAsk))}<small>bid ${escapeHtml(formatDelta(row.deltaBid))} · ask ${escapeHtml(formatDelta(row.deltaAsk))}</small></span>
-            <span>${row.wallets} wallet${row.wallets === 1 ? "" : "s"}<small>${row.orders} orders</small></span>
+            <span class="order-asset"><b>${escapeHtml(row.displayName)}</b><small>${row.displayName !== row.asset ? `${escapeHtml(row.asset)} · ` : ""}${escapeHtml(hasPrevious ? orderSignal(row) : net.label)}</small></span>
+            <span class="order-metric order-metric--bid" data-label="Live bids"><b>${escapeHtml(fmtUsd(row.bidNotional))}</b><small>${row.bidMin ?? "—"}–${row.bidMax ?? "—"}</small></span>
+            <span class="order-metric order-metric--ask" data-label="Live asks"><b>${escapeHtml(fmtUsd(row.askNotional))}</b><small>${row.askMin ?? "—"}–${row.askMax ?? "—"}</small></span>
+            <span class="order-metric order-metric--${net.side}" data-label="Delta"><b>${escapeHtml(fmtUsd(net.amount))}</b><small>${net.label}</small></span>
+            <span class="order-actors" data-label="Actors">${Number(row.wallets || 0)} wallet${Number(row.wallets || 0) === 1 ? "" : "s"}<small>${Number(row.orders || 0)} ${Number(row.orders || 0) === 1 ? "order" : "orders"}</small></span>
           </button>
           ${open ? `<div class="order-detail">${buildOrderDetail(row.asset)}</div>` : ""}
         </td></tr>`;
@@ -1107,6 +1157,19 @@ for (const button of els.marketTabs) {
 }
 
 els.tableBody.addEventListener("click", async (event) => {
+  const orderSort = event.target.closest("[data-order-sort]");
+  if (orderSort) {
+    const key = orderSort.dataset.orderSort;
+    if (!Object.prototype.hasOwnProperty.call(orderSortLabels, key)) return;
+    if (state.orderSortKey === key) {
+      state.orderSortDir = state.orderSortDir === "desc" ? "asc" : "desc";
+    } else {
+      state.orderSortKey = key;
+      state.orderSortDir = "desc";
+    }
+    renderOrderTable();
+    return;
+  }
   const orderTarget = event.target.closest("[data-order-asset]");
   if (orderTarget) {
     const asset = orderTarget.dataset.orderAsset;
