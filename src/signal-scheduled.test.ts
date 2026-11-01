@@ -38,12 +38,18 @@ test("scheduled refresh runs signal and spot workflows together", async () => {
         failures: 0,
       };
     },
+    openOrderRunner: async (input) => {
+      assert.strictEqual(input, traders);
+      calls.push("open-orders");
+      return { source: "github-action", snapshotId: 128, capturedAt: "2026-10-08T01:05:00.000Z", tradersScanned: 106, failures: 0, totalOrders: 12 };
+    },
   });
 
-  assert.deepEqual(calls.sort(), ["signal", "spot"]);
+  assert.deepEqual(calls.sort(), ["open-orders", "signal", "spot"]);
   assert.equal(result.status, "success");
   assert.equal(result.signal?.tradersTotal, 106);
   assert.equal(result.spot?.tradersScanned, 106);
+  assert.equal(result.openOrders?.tradersScanned, 106);
 });
 
 test("scheduled refresh reports spot scrape failures as partial", async () => {
@@ -66,6 +72,7 @@ test("scheduled refresh reports spot scrape failures as partial", async () => {
       tradersWithFilteredHoldings: 11,
       failures: 1,
     }),
+    openOrderRunner: async () => ({ source: "github-action", snapshotId: 129, capturedAt: "2026-10-08T01:05:00.000Z", tradersScanned: 106, failures: 0, totalOrders: 0 }),
   });
 
   assert.equal(result.status, "partial");
@@ -79,6 +86,7 @@ test("scheduler rejects empty, invalid or duplicate canonical registries before 
     traderLoader: async () => [],
     signalRunner: async () => { launched = true; throw new Error("unexpected"); },
     spotRunner: async () => { launched = true; throw new Error("unexpected"); },
+    openOrderRunner: async () => { launched = true; throw new Error("unexpected"); },
   }), /registry is empty/);
   assert.equal(launched, false);
 });
@@ -102,7 +110,8 @@ test("scheduler reports mismatched coverage as partial even if runners claim suc
     traderLoader: async () => traders,
     signalRunner: async () => ({ snapshotId: 1, tradersTotal: 91, tradersCompleted: 91, tradersFailed: 0, totalPositions: 10, tradersRemaining: 0, status: "success" }),
     spotRunner: async () => ({ source: "github-action", snapshotId: 1, generatedAt: null, tradersScanned: 91, tradersWithFilteredHoldings: 10, failures: 0 }),
+    openOrderRunner: async () => ({ source: "github-action", snapshotId: 1, capturedAt: "2026-10-08T01:05:00.000Z", tradersScanned: 91, failures: 0, totalOrders: 0 }),
   });
   assert.equal(result.status, "partial");
-  assert.equal(result.errors.length, 2);
+  assert.equal(result.errors.length, 3);
 });

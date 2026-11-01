@@ -116,18 +116,19 @@ New on-demand signals dashboard:
 - Open the app, log in, and use `Refresh Signals` to run a manual Hypurrscan scrape pass through Firecrawl.
 - The UI stores each manual run as a snapshot and lets you switch between `Crypto` and `TradFi`.
 
-Scheduled pre-market refresh:
+Scheduled refresh:
 - The preferred scheduler is GitHub Actions via `.github/workflows/cex-scheduled-refresh.yml`.
-- Use `01:00 UTC` for an 08:00 Asia/Ho_Chi_Minh start, and schedule early enough to finish before the 09:00 desk review.
+- It runs once daily at nominally `01:00 UTC` (08:00 GMT+7). GitHub may delay scheduled jobs; use `workflow_dispatch` for an additional on-demand pass when intraday freshness matters.
 - The worker writes a new snapshot through the same Firecrawl pipeline as the dashboard.
-- The dashboard keeps the newest successful snapshot published while a new snapshot is running or fails.
+- The dashboard keeps the newest successful snapshot published while a new snapshot is running or fails, and labels it with its capture time. It is a scheduled snapshot, not a live position feed.
 - GitHub Actions is the only production scheduler; do not add a second scheduler.
 
 ### GitHub Actions scheduler
 
 The scheduled refresh runs from GitHub Actions using
-`.github/workflows/cex-scheduled-refresh.yml`. It runs at `01:00 UTC`
-(`08:00 GMT+7`) and can be started manually with `workflow_dispatch`.
+`.github/workflows/cex-scheduled-refresh.yml`. It runs once daily at `01:00 UTC`
+(`08:00 GMT+7`) and can be started manually with `workflow_dispatch` when an
+additional intraday refresh is needed.
 
 Configure these GitHub Actions Secrets before enabling the workflow:
 
@@ -188,6 +189,7 @@ supabase/migrations/20260319_000002_service_role_grants.sql
 supabase/migrations/20260420_000001_signal_dashboard_schema.sql
 supabase/migrations/20260506_000001_entities_updated_at_trigger.sql
 supabase/migrations/20261017_000001_spot_dashboard_schema.sql
+supabase/migrations/20261101_000001_open_order_snapshot_schema.sql
 ```
 
 Set these variables in both Vercel and GitHub Actions as appropriate:
@@ -203,8 +205,10 @@ Notes:
 - `FIRECRAWL_API_KEY` is still required for live Hypurrscan refreshes.
 - Spot holdings use Hypurrscan `#spot` pages. By default the Spot view keeps all non-stable/non-trash wallet-token holdings with value `> $333`; set `SPOT_HOLDING_INCLUDE_TOKENS` only if you want to narrow the displayed token set.
 
-After the migration is applied, GitHub Actions writes signal and spot snapshots
-to Supabase and Vercel reads the latest successful snapshots.
+After the migration is applied, GitHub Actions writes signal, spot, and native
+Hyperliquid open-order snapshots to Supabase. Vercel reads only the latest
+successful snapshots. `HYPERLIQUID_OPEN_ORDERS_CONCURRENCY` is an optional
+GitHub Actions variable (default `6`).
 
 ## Key Paths
 
@@ -215,6 +219,8 @@ to Supabase and Vercel reads the latest successful snapshots.
 - `src/hypurrscan-signals.ts`: Firecrawl-backed Hypurrscan scrape + perps parser
 - `src/spot-holdings.ts`: Firecrawl-backed Hypurrscan `#spot` scrape + non-stable holdings export
 - `src/spot-storage.ts`: Supabase spot snapshot persistence and dashboard reads
+- `src/open-order-scan.ts`: native Hyperliquid `openOrders` collector for the tracked registry
+- `src/open-order-storage.ts`: durable open-order snapshot persistence and dashboard reads
 - `src/spot-token-filter.ts`: Spot token threshold/exclusion config
 - `src/trader-registry.ts`: CSV-backed tracked trader registry loader
 - `src/server.ts`: Express APIs + dashboard hosting

@@ -35,6 +35,9 @@ const state = {
   spotGeneratedAt: null,
   copyRunning: false,
   readOnlyHosted: false,
+  orderDashboard: null,
+  orderDetails: new Map(),
+  openOrderAsset: null,
 };
 
 const MAX_VISIBLE_SNAPSHOTS = 5;
@@ -54,6 +57,10 @@ const spotSortLabels = {
 
 function isSpotView() {
   return state.market === "spot";
+}
+
+function isOrderView() {
+  return state.market === "orders";
 }
 
 function escapeHtml(value) {
@@ -159,8 +166,8 @@ function updateSummary(snapshot, runSummary = null) {
         ? `${Number(snapshot.traders_failed || 0)} trader scrapes failed`
         : status === "failed"
           ? snapshot.error_message || "Refresh failed"
-          : "Ready";
-  els.heroMeta.textContent = `${fmtDate(timestamp)} · ${suffix}`;
+          : "Latest successful scheduled snapshot; not a live feed";
+  els.heroMeta.textContent = `${status === "success" ? "Captured" : "Updated"} ${fmtDate(timestamp)} · ${suffix}`;
 }
 
 function updateSpotSummary(payload) {
@@ -193,8 +200,122 @@ function updateCopyButton() {
         : "Refresh Signals";
   }
   if (!els.copyButton) return;
-  els.copyButton.disabled = isSpotView() || !state.selectedSnapshotId || state.copyRunning;
+  els.copyButton.disabled = isSpotView() || isOrderView() || !state.selectedSnapshotId || state.copyRunning;
   els.copyButton.textContent = state.copyRunning ? "Copying..." : "Copy";
+}
+
+function formatDelta(value) {
+  const numeric = Number(value || 0);
+  const prefix = numeric > 0 ? "+" : numeric < 0 ? "−" : "";
+  return `${prefix}${fmtUsd(Math.abs(numeric))}`;
+}
+
+function setOrderControls(active) {
+  const snapshotBlock = els.snapshotSelect?.closest(".control-block");
+  if (snapshotBlock) snapshotBlock.hidden = active;
+  document.body.classList.toggle("is-order-view", active);
+}
+
+function updateOrderSummary(payload) {
+  const snapshot = payload?.snapshot || {};
+  const overview = payload?.overview || {};
+  const status = snapshot.status || "unavailable";
+  els.summaryStatus.textContent = status.toUpperCase();
+  els.summaryStatus.className = "pill";
+  els.summaryStatus.classList.add(status === "available" ? "is-success" : "is-warning");
+  els.summaryTraders.textContent = `${Number(snapshot.successfulWallets || 0)}/${Number(snapshot.totalWallets || 0)} wallets`;
+  els.summaryPositions.textContent = `${Number(snapshot.totalOrders || 0).toLocaleString()} open orders`;
+  els.summaryZeroPositions.textContent = `${fmtUsd(overview.bidNotional)} bids · ${fmtUsd(overview.askNotional)} asks`;
+  els.heroMeta.textContent = snapshot.fetchedAt
+    ? `Captured ${fmtDate(snapshot.fetchedAt)} · Native Hyperliquid openOrders · conditional liquidity, not holdings or fills`
+    : "No native open-order snapshot is available yet.";
+}
+
+function orderSignal(row) {
+  if (row.deltaBid > 0 && row.deltaAsk <= 0) return "Bid ladder added";
+  if (row.deltaBid < 0 && row.deltaAsk >= 0) return "Bid ladder removed";
+  if (row.deltaAsk > 0 && row.deltaBid <= 0) return "Ask ladder added";
+  if (row.deltaAsk < 0 && row.deltaBid >= 0) return "Ask ladder removed";
+  return "Two-sided repricing";
+}
+
+function buildOrderLadder(orders, side) {
+  const max = Math.max(...orders.map((order) => Number(order.notional || 0)), 1);
+  return orders.length
+    ? orders.slice(0, 16).map((order) => `
+      <a class="ladder-row ladder-row--${side}" href="${escapeHtml(order.sourceUrl)}" target="_blank" rel="noreferrer">
+        <span class="ladder-price">${escapeHtml(String(order.price))}</span>
+        <span class="ladder-bar"><i style="--ladder-fill:${Math.max(5, (Number(order.notional || 0) / max) * 100)}%"></i></span>
+        <span class="ladder-value">${escapeHtml(fmtUsd(order.notional))}</span>
+      </a>
+    `).join("")
+    : '<div class="empty-note">No live orders on this side.</div>';
+}
+
+function buildOrderDetail(asset) {
+  const detail = state.orderDetails.get(asset);
+  if (!detail) return '<div class="order-detail-loading">Loading exact price ladder…</div>';
+  const walletRows = (detail.wallets || []).slice(0, 8).map((wallet) => `
+    <a class="order-wallet-row" href="${escapeHtml(wallet.sourceUrl)}" target="_blank" rel="noreferrer">
+      <span><strong>${escapeHtml(wallet.traderName)}</strong><small>${escapeHtml(shortWallet(wallet.walletAddress))} · ${escapeHtml(wallet.side)}</small></span>
+      <span>${escapeHtml(fmtUsd(wallet.notional))}<small>${wallet.orders} orders · ${wallet.minPrice}–${wallet.maxPrice}</small></span>
+    </a>
+  `).join("");
+  return `
+    <section class="order-detail-grid">
+      <div class="ladder-card ladder-card--bid"><h3>Bid ladder</h3>${buildOrderLadder(detail.bids || [], "bid")}</div>
+      <div class="ladder-card ladder-card--ask"><h3>Ask ladder</h3>${buildOrderLadder(detail.asks || [], "ask")}</div>
+      <div class="wallet-card"><h3>Wallet attribution</h3>${walletRows || '<div class="empty-note">No wallet rows.</div>'}</div>
+    </section>
+  `;
+}
+
+function renderOrderTable() {
+  const payload = state.orderDashboard;
+  const rows = Array.isArray(payload?.assets) ? payload.assets : [];
+  const overview = payload?.overview || {};
+  els.tableTitle.textContent = "Order Intent";
+  els.tableSubtitle.textContent = "Ranked by change versus the prior native snapshot. Limit orders are conditional liquidity, not holdings, fills, or guaranteed directional conviction.";
+  els.tableStatus.textContent = `${rows.length} native assets`;
+  els.tableHead.innerHTML = "";
+  els.tableHead.closest("table")?.classList.add("order-intent-table");
+  if (!rows.length) {
+    els.tableBody.innerHTML = '<tr><td><div class="drilldown-panel"><div class="empty-note">No open-order data available.</div></div></td></tr>';
+    return;
+  }
+  const highlights = rows.slice(0, 4).map((row) => `
+    <button class="intent-highlight" type="button" data-order-asset="${escapeHtml(row.asset)}">
+      <span>${escapeHtml(row.displayName)} <small>${escapeHtml(row.asset)}</small></span>
+      <strong>${escapeHtml(orderSignal(row))}</strong>
+      <em>${escapeHtml(formatDelta(row.deltaBid + row.deltaAsk))}</em>
+    </button>
+  `).join("");
+  els.tableBody.innerHTML = `
+    <tr class="order-summary-row"><td>
+      <section class="intent-kpis">
+        <article><span>Live bid intent</span><strong>${escapeHtml(fmtUsd(overview.bidNotional))}</strong><small>Conditional buy liquidity now</small></article>
+        <article><span>Live ask intent</span><strong>${escapeHtml(fmtUsd(overview.askNotional))}</strong><small>Conditional sell liquidity now</small></article>
+        <article><span>Order churn</span><strong>${Number(overview.addedOrders || 0).toLocaleString()} / ${Number(overview.cancelledOrders || 0).toLocaleString()}</strong><small>added / cancelled orders</small></article>
+      </section>
+      <section class="intent-highlights"><div class="intent-section-label">Largest intent shifts</div>${highlights}</section>
+      <div class="intent-section-label">Token radar</div>
+    </td></tr>
+    <tr class="order-column-head"><td><div class="order-grid order-grid--head"><span>Asset / signal</span><span>Live bids</span><span>Live asks</span><span>Delta</span><span>Actors</span></div></td></tr>
+    ${rows.map((row) => {
+      const open = state.openOrderAsset === row.asset;
+      return `
+        <tr class="order-row ${open ? "is-open" : ""}" data-order-asset="${escapeHtml(row.asset)}"><td>
+          <button class="order-grid order-grid--row" type="button" data-order-asset="${escapeHtml(row.asset)}">
+            <span class="order-asset"><b>${escapeHtml(row.displayName)}</b><small>${escapeHtml(row.asset)} · ${escapeHtml(orderSignal(row))}</small></span>
+            <span>${escapeHtml(fmtUsd(row.bidNotional))}<small>${row.bidMin ?? "—"}–${row.bidMax ?? "—"}</small></span>
+            <span>${escapeHtml(fmtUsd(row.askNotional))}<small>${row.askMin ?? "—"}–${row.askMax ?? "—"}</small></span>
+            <span class="${row.deltaBid + row.deltaAsk >= 0 ? "positive" : "negative"}">${escapeHtml(formatDelta(row.deltaBid + row.deltaAsk))}<small>bid ${escapeHtml(formatDelta(row.deltaBid))} · ask ${escapeHtml(formatDelta(row.deltaAsk))}</small></span>
+            <span>${row.wallets} wallet${row.wallets === 1 ? "" : "s"}<small>${row.orders} orders</small></span>
+          </button>
+          ${open ? `<div class="order-detail">${buildOrderDetail(row.asset)}</div>` : ""}
+        </td></tr>`;
+    }).join("")}
+  `;
 }
 
 function renderSnapshotOptions() {
@@ -404,6 +525,12 @@ function buildSpotDrilldownCell(row) {
 }
 
 function renderTable() {
+  if (isOrderView()) {
+    renderOrderTable();
+    return;
+  }
+
+  els.tableHead.closest("table")?.classList.remove("order-intent-table");
   if (isSpotView()) {
     renderSpotTable();
     return;
@@ -591,6 +718,22 @@ async function loadSnapshots(preferredSnapshotId) {
 }
 
 async function loadSnapshotRows() {
+  if (isOrderView()) {
+    const payload = await fetchJson("/api/open-orders");
+    state.orderDashboard = payload;
+    state.openOrderAsset = null;
+    updateOrderSummary(payload);
+    setBanner(
+      payload.snapshot?.previousFetchedAt
+        ? `Comparing against ${fmtDate(payload.snapshot.previousFetchedAt)}. Asset IDs stay separate even where display tickers match.`
+        : "No previous native snapshot is available for a change comparison.",
+      "info",
+    );
+    renderTable();
+    updateCopyButton();
+    return;
+  }
+
   if (isSpotView()) {
     const payload = await fetchJson("/api/spot-holdings");
     state.rows = Array.isArray(payload.rows) ? payload.rows : [];
@@ -711,6 +854,13 @@ async function ensureDrilldown(token) {
     `/api/signals/${state.selectedSnapshotId}/token/${encodeURIComponent(token)}`,
   );
   state.drilldowns.set(token, payload);
+  renderTable();
+}
+
+async function ensureOrderDetail(asset) {
+  if (state.orderDetails.has(asset)) return;
+  const payload = await fetchJson(`/api/open-orders/${encodeURIComponent(asset)}`);
+  state.orderDetails.set(asset, payload.detail);
   renderTable();
 }
 
@@ -943,10 +1093,12 @@ els.tableHead.addEventListener("click", (event) => {
 for (const button of els.marketTabs) {
   button.addEventListener("click", async () => {
     const nextMarket = button.dataset.market;
-    state.market = nextMarket === "tradfi" || nextMarket === "spot" ? nextMarket : "crypto";
+    state.market = nextMarket === "tradfi" || nextMarket === "spot" || nextMarket === "orders" ? nextMarket : "crypto";
     state.sortKey = state.market === "spot" ? "holdersCount" : "smwFlows";
     state.sortDir = "desc";
     state.drilldowns.clear();
+    state.orderDetails.clear();
+    setOrderControls(isOrderView());
     for (const candidate of els.marketTabs) {
       candidate.classList.toggle("is-active", candidate === button);
     }
@@ -955,6 +1107,15 @@ for (const button of els.marketTabs) {
 }
 
 els.tableBody.addEventListener("click", async (event) => {
+  const orderTarget = event.target.closest("[data-order-asset]");
+  if (orderTarget) {
+    const asset = orderTarget.dataset.orderAsset;
+    if (!asset) return;
+    state.openOrderAsset = state.openOrderAsset === asset ? null : asset;
+    renderTable();
+    if (state.openOrderAsset === asset) await ensureOrderDetail(asset);
+    return;
+  }
   const row = event.target.closest(".signal-row");
   if (!row) return;
   const token = row.dataset.token;

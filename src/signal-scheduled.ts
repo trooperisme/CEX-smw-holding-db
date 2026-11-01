@@ -4,6 +4,8 @@ import { runSpotHoldingsScan } from "./spot-holdings";
 import { persistSpotHoldingsSnapshot } from "./spot-storage";
 import { SpotHoldingsScanSummary } from "./spot-holdings";
 import { createSignalStorage } from "./signal-storage";
+import { runOpenOrderScan } from "./open-order-scan";
+import { persistOpenOrderSnapshot } from "./open-order-storage";
 import { TrackedTrader } from "./types";
 
 dotenv.config();
@@ -23,6 +25,7 @@ export type ScheduledRefreshResult = {
   status: "success" | "partial" | "failed";
   signal: RunSignalRefreshResult | null;
   spot: ScheduledSpotRefreshResult | null;
+  openOrders: ScheduledOpenOrderRefreshResult | null;
   errors: string[];
 };
 
@@ -32,6 +35,16 @@ type ScheduledRefreshOptions = {
   traderLoader?: () => Promise<TrackedTrader[]>;
   signalRunner?: (traders: TrackedTrader[]) => Promise<RunSignalRefreshResult>;
   spotRunner?: (traders: TrackedTrader[]) => Promise<ScheduledSpotRefreshResult>;
+  openOrderRunner?: (traders: TrackedTrader[]) => Promise<ScheduledOpenOrderRefreshResult>;
+};
+
+export type ScheduledOpenOrderRefreshResult = {
+  source: "github-action";
+  snapshotId: number;
+  capturedAt: string;
+  tradersScanned: number;
+  failures: number;
+  totalOrders: number;
 };
 
 function errorMessage(error: unknown): string {
@@ -82,11 +95,30 @@ async function refreshSpotHoldingsInAction(
   };
 }
 
+async function refreshOpenOrdersInAction(
+  logger: (line: string) => void, traders: TrackedTrader[],
+): Promise<ScheduledOpenOrderRefreshResult> {
+  logger("Scheduled native open-order refresh running directly in GitHub Actions");
+  const result = await runOpenOrderScan({ traders, logger });
+  if (result.totalWallets !== traders.length || result.successfulWallets !== traders.length || result.failedWallets !== 0) {
+    throw new Error("Open-order scan did not cover the complete tracked trader registry");
+  }
+  const snapshotId = await persistOpenOrderSnapshot(result);
+  return {
+    source: "github-action",
+    snapshotId,
+    capturedAt: result.fetchedAt,
+    tradersScanned: result.totalWallets,
+    failures: result.failedWallets,
+    totalOrders: result.totalIndividualOrders,
+  };
+}
+
 export async function runScheduledRefresh(options: ScheduledRefreshOptions = {}): Promise<ScheduledRefreshResult> {
   const startedAt = new Date().toISOString();
   const cwd = options.cwd || process.cwd();
   const logger = options.logger || ((line: string) => console.log(`[scheduled-signals] ${line}`));
-  logger(`Scheduled signals + spot refresh started at ${startedAt}`);
+  logger(`Scheduled signals + spot + open-order refresh started at ${startedAt}`);
 
   const traders = await (options.traderLoader || (async () => {
     const storage = createSignalStorage(cwd);
@@ -99,18 +131,21 @@ export async function runScheduledRefresh(options: ScheduledRefreshOptions = {})
   validateScheduledTraders(traders);
   logger(`Loaded ${traders.length} active traders from durable registry`);
 
-  const [signalOutcome, spotOutcome] = await Promise.allSettled([
+  const [signalOutcome, spotOutcome, openOrderOutcome] = await Promise.allSettled([
     (options.signalRunner || ((input) => runSignalRefresh({
       cwd, logger, traders: input, replaceTrackedTraders: false, requireNonemptyOutput: true,
     })))(traders),
     (options.spotRunner || ((input) => refreshSpotHoldingsInAction(cwd, logger, input)))(traders),
+    (options.openOrderRunner || ((input) => refreshOpenOrdersInAction(logger, input)))(traders),
   ]);
 
   const signal = signalOutcome.status === "fulfilled" ? signalOutcome.value : null;
   const spot = spotOutcome.status === "fulfilled" ? spotOutcome.value : null;
+  const openOrders = openOrderOutcome.status === "fulfilled" ? openOrderOutcome.value : null;
   const errors = [
     ...(signalOutcome.status === "rejected" ? [`signal: ${errorMessage(signalOutcome.reason)}`] : []),
     ...(spotOutcome.status === "rejected" ? [`spot: ${errorMessage(spotOutcome.reason)}`] : []),
+    ...(openOrderOutcome.status === "rejected" ? [`open-orders: ${errorMessage(openOrderOutcome.reason)}`] : []),
   ];
   if (signal && (signal.tradersTotal !== traders.length || signal.tradersCompleted !== traders.length ||
       signal.tradersFailed !== 0 || signal.tradersRemaining !== 0 || signal.totalPositions <= 0)) {
@@ -119,10 +154,14 @@ export async function runScheduledRefresh(options: ScheduledRefreshOptions = {})
   if (spot && (spot.tradersScanned !== traders.length || spot.failures !== 0 || spot.tradersWithFilteredHoldings <= 0)) {
     errors.push("spot: incomplete registry coverage, failed fetch, or empty output");
   }
+  if (openOrders && (openOrders.tradersScanned !== traders.length || openOrders.failures !== 0)) {
+    errors.push("open-orders: incomplete registry coverage or failed fetch");
+  }
   const hasSignalFailure = !signal || signal.status === "failed";
   const hasSignalPartial = signal?.status !== "success";
   const hasSpotFailure = !spot || spot.failures > 0;
-  const status: ScheduledRefreshResult["status"] = hasSignalFailure || !spot
+  const hasOpenOrderFailure = !openOrders || openOrders.failures > 0;
+  const status: ScheduledRefreshResult["status"] = hasSignalFailure || !spot || hasOpenOrderFailure
     ? "failed"
     : hasSignalPartial || hasSpotFailure || errors.length > 0
       ? "partial"
@@ -134,6 +173,7 @@ export async function runScheduledRefresh(options: ScheduledRefreshOptions = {})
     status,
     signal,
     spot,
+    openOrders,
     errors,
   };
 }

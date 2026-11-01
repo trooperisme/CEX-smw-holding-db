@@ -18,6 +18,7 @@ import { createStorage } from "./storage";
 import { runSheetSyncToSupabase } from "./sync";
 import { loadTrackedTraders } from "./trader-registry";
 import { SignalMarketType, SignalTraderRunRecord } from "./types";
+import { loadDurableOpenOrderDashboard } from "./open-order-storage";
 
 dotenv.config();
 
@@ -499,6 +500,38 @@ app.get("/api/artifacts/file", (req, res) => {
 app.get("/api/spot-holdings", async (_req, res) => {
   try {
     res.json(await loadSpotHoldingsDashboard());
+  } catch (error) {
+    res.status(500).json({ error: (error as Error)?.message || String(error) });
+  }
+});
+
+app.get("/api/open-orders", async (_req, res) => {
+  try {
+    const dashboard = await loadDurableOpenOrderDashboard(cwd);
+    if (!dashboard) {
+      res.status(404).json({ error: "No native open-order snapshot is available yet" });
+      return;
+    }
+    res.set("Cache-Control", "no-store").json({
+      snapshot: dashboard.snapshot,
+      overview: dashboard.overview,
+      assets: dashboard.assets,
+    });
+  } catch (error) {
+    res.status(500).json({ error: (error as Error)?.message || String(error) });
+  }
+});
+
+app.get("/api/open-orders/:asset", async (req, res) => {
+  try {
+    const dashboard = await loadDurableOpenOrderDashboard(cwd);
+    const asset = decodeURIComponent(req.params.asset);
+    const detail = dashboard?.details[asset];
+    if (!detail) {
+      res.status(404).json({ error: "Open-order asset not found" });
+      return;
+    }
+    res.set("Cache-Control", "no-store").json({ snapshot: dashboard.snapshot, detail });
   } catch (error) {
     res.status(500).json({ error: (error as Error)?.message || String(error) });
   }

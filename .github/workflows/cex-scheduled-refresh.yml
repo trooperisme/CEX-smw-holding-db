@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   refresh:
-    name: Refresh signals and spot holdings
+    name: Refresh signals, spot holdings, and order intent
     runs-on: ubuntu-latest
     # A full scan can approach 60 minutes when the upstream source is slow.
     timeout-minutes: 90
@@ -53,4 +53,5 @@ jobs:
           SPOT_HOLDING_CONCURRENCY: ${{ vars.SPOT_HOLDING_CONCURRENCY || '4' }}
           SPOT_HOLDING_MIN_USD: ${{ vars.SPOT_HOLDING_MIN_USD || '333' }}
           SPOT_HOLDING_CACHE_TTL_HOURS: ${{ vars.SPOT_HOLDING_CACHE_TTL_HOURS || '6' }}
+          HYPERLIQUID_OPEN_ORDERS_CONCURRENCY: ${{ vars.HYPERLIQUID_OPEN_ORDERS_CONCURRENCY || '6' }}
         run: npm run signals:scheduled
