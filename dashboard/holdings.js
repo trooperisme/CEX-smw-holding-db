@@ -16,6 +16,13 @@ const els = {
   tableStatus: document.getElementById("table-status"),
   tableBody: document.getElementById("table-body"),
   statusBanner: document.getElementById("status-banner"),
+  pageLoader: document.getElementById("page-loader"),
+  pageLoaderMessage: document.getElementById("page-loader-message"),
+  pageLoaderRetry: document.getElementById("page-loader-retry"),
+  viewLoader: document.getElementById("view-loader"),
+  viewLoaderMessage: document.getElementById("view-loader-message"),
+  viewLoaderRetry: document.getElementById("view-loader-retry"),
+  summaryStrip: document.querySelector(".summary-strip"),
 };
 
 const state = {
@@ -40,6 +47,7 @@ const state = {
   openOrderAsset: null,
   orderSortKey: "net",
   orderSortDir: "desc",
+  viewRequestId: 0,
 };
 
 const MAX_VISIBLE_SNAPSHOTS = 5;
@@ -63,6 +71,40 @@ function isSpotView() {
 
 function isOrderView() {
   return state.market === "orders";
+}
+
+function marketLabel(market = state.market) {
+  if (market === "tradfi") return "TradFi";
+  if (market === "spot") return "Spot";
+  if (market === "orders") return "Order Intent";
+  return "Crypto";
+}
+
+function setViewLoading(loading, market = state.market) {
+  els.viewLoader.hidden = !loading;
+  els.viewLoaderMessage.textContent = `Loading ${marketLabel(market)}…`;
+  els.viewLoaderRetry.hidden = true;
+  els.viewLoader.querySelector(".loader-mark").hidden = false;
+  els.summaryStrip.classList.toggle("is-loading", loading);
+  els.tableBody.setAttribute("aria-busy", String(loading));
+  els.tableHead.setAttribute("aria-busy", String(loading));
+}
+
+function setPageLoading(loading, message = "Loading your dashboard…", hasError = false) {
+  els.pageLoader.hidden = !loading;
+  els.pageLoaderMessage.textContent = message;
+  els.pageLoaderRetry.hidden = !hasError;
+  els.pageLoader.dataset.state = hasError ? "error" : "loading";
+}
+
+function setViewError(market, error) {
+  els.viewLoader.hidden = false;
+  els.viewLoader.querySelector(".loader-mark").hidden = true;
+  els.viewLoaderMessage.textContent = `Could not load ${marketLabel(market)}. ${(error && error.message) || String(error)}`;
+  els.viewLoaderRetry.hidden = false;
+  els.summaryStrip.classList.remove("is-loading");
+  els.tableBody.setAttribute("aria-busy", "false");
+  els.tableHead.setAttribute("aria-busy", "false");
 }
 
 function escapeHtml(value) {
@@ -768,79 +810,98 @@ async function loadSnapshots(preferredSnapshotId) {
 }
 
 async function loadSnapshotRows() {
-  if (isOrderView()) {
-    const payload = await fetchJson("/api/open-orders");
-    state.orderDashboard = payload;
-    state.openOrderAsset = null;
-    updateOrderSummary(payload);
-    setBanner(
-      payload.snapshot?.previousFetchedAt
-        ? `Comparing against ${fmtDate(payload.snapshot.previousFetchedAt)}. Asset IDs stay separate even where display tickers match.`
-        : "No previous native snapshot is available for a change comparison.",
-      "info",
-    );
-    renderTable();
-    updateCopyButton();
-    return;
-  }
+  const requestId = ++state.viewRequestId;
+  const requestedMarket = state.market;
+  let failed = false;
+  setViewLoading(true, requestedMarket);
+  try {
+    if (isOrderView()) {
+      const payload = await fetchJson("/api/open-orders");
+      if (requestId !== state.viewRequestId) return;
+      state.orderDashboard = payload;
+      state.openOrderAsset = null;
+      updateOrderSummary(payload);
+      setBanner(
+        payload.snapshot?.previousFetchedAt
+          ? `Comparing against ${fmtDate(payload.snapshot.previousFetchedAt)}. Asset IDs stay separate even where display tickers match.`
+          : "No previous native snapshot is available for a change comparison.",
+        "info",
+      );
+      renderTable();
+      updateCopyButton();
+      return;
+    }
 
-  if (isSpotView()) {
-    const payload = await fetchJson("/api/spot-holdings");
+    if (isSpotView()) {
+      const payload = await fetchJson("/api/spot-holdings");
+      if (requestId !== state.viewRequestId) return;
+      state.rows = Array.isArray(payload.rows) ? payload.rows : [];
+      state.spotSummary = payload.summary || null;
+      state.spotGeneratedAt = payload.generatedAt || null;
+      state.openToken = null;
+      updateSpotSummary(payload);
+      if (payload.generatedAt) {
+        const filteredOut = payload.summary?.filteredOut || {};
+        const minUsd = Number(payload.summary?.minUsd || 333);
+        setBanner(
+          `Spot filter kept ${Number(payload.summary?.keptHoldings || payload.summary?.relevantHoldings || 0)} non-stable holdings > ${fmtUsd(minUsd)}. Filtered out stable=${Number(filteredOut.stable || 0)}, trash=${Number(filteredOut.trash || 0)}, unrelated=${Number(filteredOut.unrelated || 0)}.`,
+          "info",
+        );
+      } else {
+        setBanner(state.readOnlyHosted
+          ? "No completed Spot snapshot yet. The next GitHub Actions scan will populate it if it passes the quality checks."
+          : "No completed Spot snapshot yet. Refresh Spot to generate it.", "warning");
+      }
+      renderTable();
+      updateCopyButton();
+      return;
+    }
+
+    if (!state.selectedSnapshotId) {
+      state.rows = [];
+      updateSummary(null);
+      renderTable();
+      updateCopyButton();
+      return;
+    }
+
+    const payload = await fetchJson(`/api/signals/${state.selectedSnapshotId}?market=${state.market}`);
+    if (requestId !== state.viewRequestId) return;
     state.rows = Array.isArray(payload.rows) ? payload.rows : [];
-    state.spotSummary = payload.summary || null;
-    state.spotGeneratedAt = payload.generatedAt || null;
+    state.runSummary = payload.runSummary || null;
+    state.coverageSummary = payload.coverageSummary || null;
     state.openToken = null;
-    updateSpotSummary(payload);
-    if (payload.generatedAt) {
-      const filteredOut = payload.summary?.filteredOut || {};
-      const minUsd = Number(payload.summary?.minUsd || 333);
-      setBanner(
-        `Spot filter kept ${Number(payload.summary?.keptHoldings || payload.summary?.relevantHoldings || 0)} non-stable holdings > ${fmtUsd(minUsd)}. Filtered out stable=${Number(filteredOut.stable || 0)}, trash=${Number(filteredOut.trash || 0)}, unrelated=${Number(filteredOut.unrelated || 0)}.`,
-        "info",
-      );
-    } else {
-      setBanner(state.readOnlyHosted
-        ? "No completed Spot snapshot yet. The next GitHub Actions scan will populate it if it passes the quality checks."
-        : "No completed Spot snapshot yet. Refresh Spot to generate it.", "warning");
+    updateSummary(payload.snapshot || null, state.runSummary);
+    if (!state.refreshRunning) {
+      const coverageBanner = buildCoverageBanner(state.coverageSummary);
+      const zeroPositionCount = Number(state.runSummary?.zeroPositionCount || 0);
+      const failedCount = Number(state.runSummary?.failedCount || 0);
+      if (coverageBanner) {
+        setBanner(coverageBanner, "warning");
+      } else if (failedCount > 0) {
+        setBanner(`${failedCount} trader scrapes failed in this snapshot.`, "warning");
+      } else if (zeroPositionCount > 0) {
+        setBanner(
+          `${zeroPositionCount} tracked traders had 0 open perps in this snapshot, so they do not appear in the token table.`,
+          "info",
+        );
+      } else {
+        setBanner("", "info");
+      }
     }
     renderTable();
     updateCopyButton();
-    return;
-  }
-
-  if (!state.selectedSnapshotId) {
-    state.rows = [];
-    updateSummary(null);
-    renderTable();
-    updateCopyButton();
-    return;
-  }
-
-  const payload = await fetchJson(`/api/signals/${state.selectedSnapshotId}?market=${state.market}`);
-  state.rows = Array.isArray(payload.rows) ? payload.rows : [];
-  state.runSummary = payload.runSummary || null;
-  state.coverageSummary = payload.coverageSummary || null;
-  state.openToken = null;
-  updateSummary(payload.snapshot || null, state.runSummary);
-  if (!state.refreshRunning) {
-    const coverageBanner = buildCoverageBanner(state.coverageSummary);
-    const zeroPositionCount = Number(state.runSummary?.zeroPositionCount || 0);
-    const failedCount = Number(state.runSummary?.failedCount || 0);
-    if (coverageBanner) {
-      setBanner(coverageBanner, "warning");
-    } else if (failedCount > 0) {
-      setBanner(`${failedCount} trader scrapes failed in this snapshot.`, "warning");
-    } else if (zeroPositionCount > 0) {
-      setBanner(
-        `${zeroPositionCount} tracked traders had 0 open perps in this snapshot, so they do not appear in the token table.`,
-        "info",
-      );
-    } else {
-      setBanner("", "info");
+  } catch (error) {
+    if (requestId === state.viewRequestId) {
+      failed = true;
+      setBanner((error && error.message) || String(error), "danger");
+      els.tableStatus.textContent = "Load failed";
+      setViewError(requestedMarket, error);
     }
+    throw error;
+  } finally {
+    if (requestId === state.viewRequestId && !failed) setViewLoading(false, requestedMarket);
   }
-  renderTable();
-  updateCopyButton();
 }
 
 async function copyTextToClipboard(text) {
@@ -879,6 +940,7 @@ async function copySignalExport() {
 }
 
 async function loadInitialData() {
+  setPageLoading(true);
   try {
     const health = await fetchJson("/api/health");
     state.readOnlyHosted = Boolean(health.readOnly);
@@ -896,7 +958,18 @@ async function loadInitialData() {
   if (latest?.status === "running" && state.selectedSnapshotId) {
     void pollRefresh(state.selectedSnapshotId);
   }
+  setPageLoading(false);
 }
+
+els.pageLoaderRetry.addEventListener("click", () => {
+  void loadInitialData().catch((error) => {
+    setPageLoading(true, (error && error.message) || String(error), true);
+  });
+});
+
+els.viewLoaderRetry.addEventListener("click", () => {
+  void loadSnapshotRows().catch(() => {});
+});
 
 async function ensureDrilldown(token) {
   if (!state.selectedSnapshotId || state.drilldowns.has(token)) return;
@@ -1152,7 +1225,11 @@ for (const button of els.marketTabs) {
     for (const candidate of els.marketTabs) {
       candidate.classList.toggle("is-active", candidate === button);
     }
-    await loadSnapshotRows();
+    try {
+      await loadSnapshotRows();
+    } catch {
+      // The view loader reports the request error in the dashboard banner.
+    }
   });
 }
 
@@ -1192,5 +1269,5 @@ els.tableBody.addEventListener("click", async (event) => {
 });
 
 void loadInitialData().catch((error) => {
-  setBanner((error && error.message) || String(error), "danger");
+  setPageLoading(true, (error && error.message) || String(error), true);
 });

@@ -7,6 +7,16 @@
     <link rel="stylesheet" href="/dashboard/styles.css" />
   </head>
   <body>
+    <div class="page-loader" id="page-loader" role="status" aria-live="polite">
+      <span class="loader-mark" aria-hidden="true"></span>
+      <div class="page-loader-copy">
+        <strong id="page-loader-title">Hypurrscan Signals</strong>
+        <span id="page-loader-message">Loading your dashboard…</span>
+      </div>
+      <button class="action-button action-button--primary page-loader-retry" id="page-loader-retry" type="button" hidden>
+        Try again
+      </button>
+    </div>
     <main class="app-shell">
       <section class="hero-panel">
         <div class="hero-copy">
@@ -46,6 +56,11 @@
       </section>
 
       <section class="table-panel">
+        <div class="view-loader" id="view-loader" role="status" aria-live="polite" hidden>
+          <span class="loader-mark" aria-hidden="true"></span>
+          <strong id="view-loader-message">Loading Crypto…</strong>
+          <button class="action-button action-button--primary" id="view-loader-retry" type="button" hidden>Try again</button>
+        </div>
         <div class="table-topline">
           <div>
             <h2 id="table-title">Crypto</h2>
