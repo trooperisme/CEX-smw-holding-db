@@ -76,7 +76,7 @@ function isOrderView() {
 function marketLabel(market = state.market) {
   if (market === "tradfi") return "TradFi";
   if (market === "spot") return "Spot";
-  if (market === "orders") return "Order Intent";
+  if (market === "orders") return "Limit";
   return "Crypto";
 }
 
@@ -356,7 +356,7 @@ function renderOrderTable() {
   const sortedRows = sortedOrderRows(rows);
   const overview = payload?.overview || {};
   const hasPrevious = Boolean(payload?.snapshot?.previousFetchedAt);
-  els.tableTitle.textContent = "Order Intent";
+  els.tableTitle.textContent = "Limit";
   els.tableSubtitle.textContent = `Sorted by ${orderSortLabels[state.orderSortKey]} (${state.orderSortDir === "desc" ? "high to low" : "low to high"}). Delta is the absolute USD gap between live bids and asks; the color marks the larger side. Limit orders are conditional liquidity, not fills.`;
   els.tableStatus.textContent = `${rows.length} native assets`;
   els.tableHead.innerHTML = "";
@@ -823,8 +823,8 @@ async function loadSnapshotRows() {
       updateOrderSummary(payload);
       setBanner(
         payload.snapshot?.previousFetchedAt
-          ? `Comparing against ${fmtDate(payload.snapshot.previousFetchedAt)}. Asset IDs stay separate even where display tickers match.`
-          : "No previous native snapshot is available for a change comparison.",
+          ? `Current scan: ${fmtDate(payload.snapshot.fetchedAt)} · compared with previous scan: ${fmtDate(payload.snapshot.previousFetchedAt)}. Asset IDs stay separate even where display tickers match.`
+          : `Current scan: ${fmtDate(payload.snapshot?.fetchedAt)} · no previous native snapshot is available for comparison.`,
         "info",
       );
       renderTable();
