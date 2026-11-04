@@ -5,6 +5,12 @@ on:
     # GitHub Actions uses UTC. The daily pass targets 08:00 GMT+7.
     - cron: "0 1 * * *"
   workflow_dispatch:
+    inputs:
+      sync_registry_only:
+        description: Sync the tracked trader registry without starting a scrape
+        type: boolean
+        required: false
+        default: false
 
 concurrency:
   group: cex-scheduled-refresh
@@ -44,6 +50,7 @@ jobs:
         run: npm run signals:registry:sync
 
       - name: Run scheduled refresh
+        if: ${{ !inputs.sync_registry_only }}
         env:
           FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
