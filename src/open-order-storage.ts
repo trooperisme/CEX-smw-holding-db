@@ -8,6 +8,8 @@ import {
 } from "./open-order-dashboard";
 import { OpenOrderScanResult } from "./open-order-scan";
 
+const OPEN_ORDER_PAGE_SIZE = 1000;
+
 function configured(): boolean {
   return Boolean(process.env.SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY);
 }
@@ -23,6 +25,52 @@ function assertNoError(error: { message: string } | null, context: string): void
 function asNumber(value: unknown): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) ? parsed : 0;
+}
+
+async function loadOpenOrderRows(
+  supabase: ReturnType<typeof getSupabaseAdminClient>,
+  snapshotIds: number[],
+): Promise<any[]> {
+  const rows: any[] = [];
+  let expectedCount: number | null = null;
+
+  while (expectedCount === null || rows.length < expectedCount) {
+    const from = rows.length;
+    const { data, error, count } = await supabase
+      .from("open_orders")
+      .select(
+        "id,snapshot_id,trader_name,wallet_address,source_url,asset_id,side,limit_price,size,oid,placed_at",
+        { count: from === 0 ? "exact" : undefined },
+      )
+      .in("snapshot_id", snapshotIds)
+      .order("id", { ascending: true })
+      .range(from, from + OPEN_ORDER_PAGE_SIZE - 1);
+    assertNoError(error, "Load open orders");
+
+    if (expectedCount === null) {
+      if (count === null) throw new Error("Load open orders: missing exact row count");
+      expectedCount = count;
+    }
+
+    const page = data || [];
+    if (!page.length && rows.length < expectedCount) {
+      throw new Error(`Load open orders: expected ${expectedCount} rows but received ${rows.length}`);
+    }
+    rows.push(...page);
+  }
+
+  return rows;
+}
+
+function assertSnapshotRows(snapshot: any, runs: any[], orders: any[]): void {
+  const expectedRuns = Number(snapshot.total_wallets || 0);
+  const expectedOrders = Number(snapshot.total_orders || 0);
+  if (runs.length !== expectedRuns) {
+    throw new Error(`Open-order snapshot ${snapshot.id} has ${runs.length}/${expectedRuns} wallet rows`);
+  }
+  if (orders.length !== expectedOrders) {
+    throw new Error(`Open-order snapshot ${snapshot.id} has ${orders.length}/${expectedOrders} order rows`);
+  }
 }
 
 function snapshotFromRows(snapshot: any, runs: any[], orders: any[]): NativeSnapshot {
@@ -139,23 +187,26 @@ export async function loadDurableOpenOrderDashboard(cwd: string): Promise<OpenOr
   assertNoError(error, "Load open-order snapshots");
   if (!snapshots?.length) return null;
   const ids = snapshots.map((snapshot: any) => snapshot.id);
-  const [{ data: runs, error: runsError }, { data: orders, error: ordersError }] = await Promise.all([
+  const [{ data: runs, error: runsError }, orders] = await Promise.all([
     supabase.from("open_order_wallet_runs").select("snapshot_id,trader_name,wallet_address,source_url,status,orders_found,error_message").in("snapshot_id", ids),
-    supabase.from("open_orders").select("snapshot_id,trader_name,wallet_address,source_url,asset_id,side,limit_price,size,oid,placed_at").in("snapshot_id", ids),
+    loadOpenOrderRows(supabase, ids),
   ]);
   assertNoError(runsError, "Load open-order wallet runs");
-  assertNoError(ordersError, "Load open orders");
+  const currentRuns = (runs || []).filter((row: any) => Number(row.snapshot_id) === Number(snapshots[0].id));
+  const currentOrders = orders.filter((row: any) => Number(row.snapshot_id) === Number(snapshots[0].id));
+  assertSnapshotRows(snapshots[0], currentRuns, currentOrders);
   const current = snapshotFromRows(
     snapshots[0],
-    (runs || []).filter((row: any) => Number(row.snapshot_id) === Number(snapshots[0].id)),
-    (orders || []).filter((row: any) => Number(row.snapshot_id) === Number(snapshots[0].id)),
+    currentRuns,
+    currentOrders,
   );
-  const previous = snapshots[1]
-    ? snapshotFromRows(
-      snapshots[1],
-      (runs || []).filter((row: any) => Number(row.snapshot_id) === Number(snapshots[1].id)),
-      (orders || []).filter((row: any) => Number(row.snapshot_id) === Number(snapshots[1].id)),
-    )
-    : null;
+  const previousRuns = snapshots[1]
+    ? (runs || []).filter((row: any) => Number(row.snapshot_id) === Number(snapshots[1].id))
+    : [];
+  const previousOrders = snapshots[1]
+    ? orders.filter((row: any) => Number(row.snapshot_id) === Number(snapshots[1].id))
+    : [];
+  if (snapshots[1]) assertSnapshotRows(snapshots[1], previousRuns, previousOrders);
+  const previous = snapshots[1] ? snapshotFromRows(snapshots[1], previousRuns, previousOrders) : null;
   return buildOpenOrderDashboard(current, previous);
 }
