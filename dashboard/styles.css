@@ -745,6 +745,17 @@ input:focus {
   z-index: 1;
 }
 
+.signals-table th small { display: block; margin-top: 4px; color: var(--muted); font-size: .62rem; letter-spacing: .02em; }
+.pulse-swing { display: grid; gap: 3px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.pulse-swing span { font-size: .78rem; }
+.pulse-muted { color: var(--muted); }
+.pulse-positive { color: var(--accent); }
+.pulse-negative { color: var(--danger); }
+.pulse-neutral { color: var(--muted); }
+.pulse-detail { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: .8rem; }
+.pulse-detail strong { color: var(--text); }
+.pulse-detail a { color: var(--accent); }
+
 .signals-table td:nth-child(n + 2),
 .signals-table th:nth-child(n + 2) {
   text-align: right;
