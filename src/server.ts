@@ -800,7 +800,9 @@ app.get("/api/signals/snapshots", async (_req, res) => {
   const storage = createSignalStorage(cwd);
   try {
     const snapshots = await storage.getSignalSnapshots();
-    res.json({ snapshots: READ_ONLY_HOSTED ? snapshots.filter((snapshot) => snapshot.status === "success") : snapshots });
+    res.json({ snapshots: READ_ONLY_HOSTED
+      ? snapshots.filter((snapshot) => snapshot.status === "success" || snapshot.status === "partial")
+      : snapshots });
   } finally {
     storage.close();
   }
