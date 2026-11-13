@@ -39,11 +39,13 @@ async function fetchWalletOrders(
       const response = await fetcher(INFO_URL, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ type: "openOrders", user: trader.walletAddress }),
+        // Match Hypurrscan's Orders tab: include orders from every Hyperliquid DEX,
+        // including HIP-3 markets such as xyz:NVDA and io:ANTH.
+        body: JSON.stringify({ type: "frontendOpenOrders", user: trader.walletAddress, dex: "ALL_DEXS" }),
       });
-      if (!response.ok) throw new Error(`Hyperliquid openOrders HTTP ${response.status}`);
+      if (!response.ok) throw new Error(`Hyperliquid frontendOpenOrders HTTP ${response.status}`);
       const orders = await response.json();
-      if (!Array.isArray(orders)) throw new Error("Hyperliquid openOrders returned a non-array payload");
+      if (!Array.isArray(orders)) throw new Error("Hyperliquid frontendOpenOrders returned a non-array payload");
       return {
         traderName: trader.traderName,
         hypurrscanUrl: ordersUrl(trader.hypurrscanUrl, trader.walletAddress),
