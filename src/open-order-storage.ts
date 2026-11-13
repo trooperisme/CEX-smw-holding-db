@@ -100,6 +100,7 @@ function snapshotFromRows(snapshot: any, runs: any[], orders: any[]): NativeSnap
   }
   return {
     fetchedAt: snapshot.captured_at,
+    source: snapshot.source || undefined,
     totalWallets: Number(snapshot.total_wallets || 0),
     successfulWallets: Number(snapshot.successful_wallets || 0),
     failedWallets: Number(snapshot.failed_wallets || 0),

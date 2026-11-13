@@ -148,7 +148,8 @@ Configure these GitHub Actions Secrets before enabling the workflow:
 Optional GitHub Actions Variables include `FIRECRAWL_MIN_INTERVAL_MS`
 (default `10000`, shared by signal and spot Firecrawl requests in one run),
 `SIGNALS_REFRESH_CONCURRENCY`, `SPOT_HOLDING_CONCURRENCY`,
-`SPOT_HOLDING_MIN_USD`, and `SPOT_HOLDING_CACHE_TTL_HOURS`. The workflow builds the checked-out commit and
+`SPOT_HOLDING_MIN_USD`, `SPOT_HOLDING_CACHE_TTL_HOURS`, and
+`HYPERLIQUID_OPEN_ORDERS_MIN_INTERVAL_MS` (default `1500`, pacing all-DEX requests). The workflow builds the checked-out commit and
 sets `REQUIRE_SUPABASE_STORAGE=1`, so it fails instead of silently writing to
 ephemeral SQLite. It fails unless the combined signal and spot refresh returns
 `success`.

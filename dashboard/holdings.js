@@ -260,8 +260,13 @@ function updateOrderSummary(payload) {
   els.summaryStatus.className = "pill";
   els.summaryStatus.classList.add(status === "available" ? "is-success" : "is-warning");
   els.summaryTraders.textContent = `${Number(snapshot.successfulWallets || 0)}/${Number(snapshot.totalWallets || 0)} wallets`;
+  const sourceLabel = String(snapshot.source || "").includes("ALL_DEXS")
+    ? "Hyperliquid · all DEXs"
+    : String(snapshot.source || "").includes("type=openOrders")
+      ? "Hyperliquid · default DEX only"
+      : "Hyperliquid · source unverified";
   els.heroMeta.textContent = snapshot.fetchedAt
-    ? `Captured ${fmtDate(snapshot.fetchedAt)} · Native Hyperliquid openOrders · conditional liquidity, not holdings or fills`
+    ? `Captured ${fmtDate(snapshot.fetchedAt)} · ${sourceLabel} · order intent, not holdings or fills`
     : "No native open-order snapshot is available yet.";
 }
 
@@ -350,7 +355,7 @@ function renderOrderTable() {
   const overview = payload?.overview || {};
   const hasPrevious = Boolean(payload?.snapshot?.previousFetchedAt);
   els.tableTitle.textContent = "Limit";
-  els.tableSubtitle.textContent = `Sorted by ${orderSortLabels[state.orderSortKey]} (${state.orderSortDir === "desc" ? "high to low" : "low to high"}). Delta is the absolute USD gap between live bids and asks; the color marks the larger side. Limit orders are conditional liquidity, not fills.`;
+  els.tableSubtitle.textContent = `Sorted by ${orderSortLabels[state.orderSortKey]} (${state.orderSortDir === "desc" ? "high to low" : "low to high"}). Delta is the absolute USD gap between open buy and sell orders; the color marks the larger side. Trigger orders may be included and are not resting book liquidity.`;
   els.tableStatus.textContent = `${rows.length} native assets`;
   els.tableHead.innerHTML = "";
   els.tableHead.closest("table")?.classList.add("order-intent-table");
@@ -378,8 +383,8 @@ function renderOrderTable() {
   els.tableBody.innerHTML = `
     <tr class="order-summary-row"><td>
       <section class="intent-kpis">
-        <article class="intent-kpi intent-kpi--bid"><span>Live bid intent</span><strong>${escapeHtml(fmtUsd(overview.bidNotional))}</strong><small>Conditional buy liquidity now</small></article>
-        <article class="intent-kpi intent-kpi--ask"><span>Live ask intent</span><strong>${escapeHtml(fmtUsd(overview.askNotional))}</strong><small>Conditional sell liquidity now</small></article>
+        <article class="intent-kpi intent-kpi--bid"><span>Open buy intent</span><strong>${escapeHtml(fmtUsd(overview.bidNotional))}</strong><small>Includes trigger orders</small></article>
+        <article class="intent-kpi intent-kpi--ask"><span>Open sell intent</span><strong>${escapeHtml(fmtUsd(overview.askNotional))}</strong><small>Includes trigger orders</small></article>
       </section>
       <section class="intent-highlights"><div class="intent-section-label">${hasPrevious ? "Largest intent shifts" : "Largest live intent"}</div><div class="intent-highlight-grid">${highlights}</div></section>
       <div class="intent-section-label">Token radar</div>
@@ -838,10 +843,14 @@ async function loadSnapshotRows() {
       state.openOrderAsset = null;
       updateOrderSummary(payload);
       setBanner(
-        payload.snapshot?.previousFetchedAt
-          ? `Current scan: ${fmtDate(payload.snapshot.fetchedAt)} · compared with previous scan: ${fmtDate(payload.snapshot.previousFetchedAt)}. Asset IDs stay separate even where display tickers match.`
-          : `Current scan: ${fmtDate(payload.snapshot?.fetchedAt)} · no previous native snapshot is available for comparison.`,
-        "info",
+        payload.snapshot?.baselineReset
+          ? `Order-source coverage changed. Change signals need one more scan with the same coverage.`
+          : !String(payload.snapshot?.source || "").includes("ALL_DEXS")
+          ? `This open-order snapshot predates verified all-DEX coverage and may miss HIP-3 orders. The next successful all-DEX scan will replace it.`
+          : payload.snapshot?.previousFetchedAt
+            ? `Current scan: ${fmtDate(payload.snapshot.fetchedAt)} · compared with previous scan: ${fmtDate(payload.snapshot.previousFetchedAt)}. Asset IDs stay separate even where display tickers match.`
+            : `Current scan: ${fmtDate(payload.snapshot?.fetchedAt)} · no previous native snapshot is available for comparison.`,
+        payload.snapshot?.baselineReset || !String(payload.snapshot?.source || "").includes("ALL_DEXS") ? "warning" : "info",
       );
       renderTable();
       updateCopyButton();

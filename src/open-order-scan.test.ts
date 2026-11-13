@@ -11,8 +11,12 @@ test("native open-order scan records complete wallet coverage and preserves empt
   const result = await runOpenOrderScan({
     traders,
     concurrency: 1,
+    minIntervalMs: 0,
     fetcher: async (_url, init) => {
-      const user = JSON.parse(String(init?.body)).user;
+      const request = JSON.parse(String(init?.body));
+      assert.equal(request.type, "frontendOpenOrders");
+      assert.equal(request.dex, "ALL_DEXS");
+      const user = request.user;
       calls.push(user);
       return new Response(user.endsWith("1") ? JSON.stringify([{ coin: "HYPE", side: "B", limitPx: "80", sz: "10", oid: 1 }]) : "[]", { status: 200 });
     },
@@ -23,4 +27,28 @@ test("native open-order scan records complete wallet coverage and preserves empt
   assert.equal(result.totalIndividualOrders, 1);
   assert.deepEqual(calls, traders.map((trader) => trader.walletAddress));
   assert.equal(result.results.find((row) => row.traderName === "second")?.hypurrscanUrl.endsWith("#orders"), true);
+  assert.match(String(result.source), /frontendOpenOrders dex=ALL_DEXS/);
+});
+
+test("all-DEX order requests are paced across concurrent wallets", async () => {
+  const traders = [1, 2, 3].map((index) => ({
+    traderName: `trader-${index}`,
+    hypurrscanUrl: `https://hypurrscan.io/address/0x${String(index).padStart(40, "0")}#orders`,
+    walletAddress: `0x${String(index).padStart(40, "0")}`,
+    isActive: true,
+  }));
+  const starts: number[] = [];
+  const result = await runOpenOrderScan({
+    traders,
+    concurrency: 3,
+    minIntervalMs: 25,
+    fetcher: async () => {
+      starts.push(Date.now());
+      return Response.json([]);
+    },
+  });
+  assert.equal(result.successfulWallets, 3);
+  assert.equal(starts.length, 3);
+  assert.ok(starts[1] - starts[0] >= 20);
+  assert.ok(starts[2] - starts[1] >= 20);
 });

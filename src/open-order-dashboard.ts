@@ -126,9 +126,18 @@ function summarizeWallets(orders: FlatOrder[]) {
 
 export type OpenOrderDashboardPayload = ReturnType<typeof buildOpenOrderDashboard>;
 
+function coverage(source: string | undefined): "all" | "default" | "unknown" {
+  if (source?.includes("ALL_DEXS")) return "all";
+  if (source?.includes("type=openOrders")) return "default";
+  return "unknown";
+}
+
 export function buildOpenOrderDashboard(current: NativeSnapshot, previous: NativeSnapshot | null) {
+  const comparable = Boolean(previous && coverage(current.source) !== "unknown" && coverage(current.source) === coverage(previous.source));
+  const baselineReset = Boolean(previous && !comparable);
+  const comparablePrevious = comparable ? previous : null;
   const orders = flatten(current);
-  const previousOrders = previous ? flatten(previous) : [];
+  const previousOrders = comparablePrevious ? flatten(comparablePrevious) : [];
   const previousByKey = new Map(previousOrders.map((order) => [orderKey(order), order]));
   const currentByKey = new Map(orders.map((order) => [orderKey(order), order]));
   const assets = new Map<string, FlatOrder[]>();
@@ -146,7 +155,7 @@ export function buildOpenOrderDashboard(current: NativeSnapshot, previous: Nativ
     const previousAskNotional = previousAsks.reduce((sum, order) => sum + order.notional, 0);
     const assetCurrentKeys = new Set(assetOrders.map(orderKey));
     const assetPreviousKeys = new Set(previousAssetOrders.map(orderKey));
-    const added = assetOrders.filter((order) => !previousByKey.has(orderKey(order)));
+    const added = comparablePrevious ? assetOrders.filter((order) => !previousByKey.has(orderKey(order))) : [];
     const cancelled = previousAssetOrders.filter((order) => !currentByKey.has(orderKey(order)));
     return {
       asset,
@@ -165,7 +174,7 @@ export function buildOpenOrderDashboard(current: NativeSnapshot, previous: Nativ
       cancelledNotional: round(cancelled.reduce((sum, order) => sum + order.notional, 0)),
       addedOrders: added.length,
       cancelledOrders: cancelled.length,
-      changeScore: Math.abs(bidNotional - previousBidNotional) + Math.abs(askNotional - previousAskNotional),
+      changeScore: comparablePrevious ? Math.abs(bidNotional - previousBidNotional) + Math.abs(askNotional - previousAskNotional) : 0,
       _currentKeys: assetCurrentKeys,
       _previousKeys: assetPreviousKeys,
     };
@@ -173,7 +182,7 @@ export function buildOpenOrderDashboard(current: NativeSnapshot, previous: Nativ
 
   const totalBid = orders.filter((order) => order.side === "bid").reduce((sum, order) => sum + order.notional, 0);
   const totalAsk = orders.filter((order) => order.side === "ask").reduce((sum, order) => sum + order.notional, 0);
-  const added = orders.filter((order) => !previousByKey.has(orderKey(order)));
+  const added = comparablePrevious ? orders.filter((order) => !previousByKey.has(orderKey(order))) : [];
   const cancelled = previousOrders.filter((order) => !currentByKey.has(orderKey(order)));
 
   return {
@@ -184,8 +193,9 @@ export function buildOpenOrderDashboard(current: NativeSnapshot, previous: Nativ
       successfulWallets: current.successfulWallets,
       failedWallets: current.failedWallets,
       totalOrders: current.totalIndividualOrders,
-      previousFetchedAt: previous?.fetchedAt || null,
-      source: "Hyperliquid native openOrders",
+      previousFetchedAt: comparablePrevious?.fetchedAt || null,
+      baselineReset,
+      source: current.source || "Hyperliquid source unspecified",
     },
     overview: {
       bidNotional: round(totalBid),
