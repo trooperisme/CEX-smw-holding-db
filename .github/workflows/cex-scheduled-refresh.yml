@@ -12,6 +12,11 @@ on:
         type: boolean
         required: false
         default: false
+      resume_signal_snapshot_id:
+        description: Retry only failed traders in an existing signal snapshot
+        type: string
+        required: false
+        default: ""
 
 concurrency:
   group: ${{ inputs.sync_registry_only && 'cex-registry-sync' || 'cex-scheduled-refresh' }}
@@ -58,8 +63,19 @@ jobs:
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
         run: npm run signals:scheduled:guard
 
+      - name: Resume failed traders in an existing snapshot
+        if: ${{ inputs.resume_signal_snapshot_id != '' }}
+        env:
+          FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          REQUIRE_SUPABASE_STORAGE: "1"
+          SIGNALS_REFRESH_CONCURRENCY: "2"
+          RESUME_SIGNAL_SNAPSHOT_ID: ${{ inputs.resume_signal_snapshot_id }}
+        run: npm run signals:recover -- "$RESUME_SIGNAL_SNAPSHOT_ID"
+
       - name: Run scheduled refresh
-        if: ${{ !inputs.sync_registry_only && (github.event_name != 'schedule' || steps.daily_guard.outputs.should_run == 'true') }}
+        if: ${{ !inputs.sync_registry_only && inputs.resume_signal_snapshot_id == '' && (github.event_name != 'schedule' || steps.daily_guard.outputs.should_run == 'true') }}
         env:
           FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}

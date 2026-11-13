@@ -329,6 +329,13 @@ export async function scrapeHypurrscanSignals(
       positions = parsePerpsTable(markdown);
     } catch (error) {
       if (scrapeFailures >= scrapeRetryCount || !isRetriableScrapeError(error)) {
+        // Firecrawl can be rate-limited or time out. Read the same live
+        // clearinghouse state Hypurrscan uses so an empty position list is
+        // recorded as a verified zero-position run instead of a failed scrape.
+        if (vaultAddress) {
+          positions = await vaultPositionRunner(vaultAddress, outputPath);
+          break;
+        }
         throw error;
       }
       scrapeFailures += 1;
