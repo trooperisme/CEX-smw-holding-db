@@ -4,7 +4,7 @@ import { buildOpenOrderDashboard } from "./open-order-dashboard";
 
 test("keeps native asset IDs separate and calculates order deltas", () => {
   const previous = {
-    fetchedAt: "2026-10-30T00:00:00.000Z", totalWallets: 1, successfulWallets: 1, failedWallets: 0, totalIndividualOrders: 2,
+    fetchedAt: "2026-10-30T00:00:00.000Z", source: "https://api.hyperliquid.xyz/info type=frontendOpenOrders dex=ALL_DEXS", totalWallets: 1, successfulWallets: 1, failedWallets: 0, totalIndividualOrders: 2,
     results: [{ traderName: "A", hypurrscanUrl: "https://hypurrscan.io/address/0x1#perps", walletAddress: "0x1", status: "success" as const, orders: [
       { coin: "HYPE", side: "B" as const, limitPx: "80", sz: "10", oid: 1 }, { coin: "@107", side: "B" as const, limitPx: "81", sz: "10", oid: 2 },
     ] }],
@@ -21,4 +21,24 @@ test("keeps native asset IDs separate and calculates order deltas", () => {
   assert.equal(dashboard.assets.find((row) => row.asset === "@107")?.askNotional, 900);
   assert.equal(dashboard.overview.addedOrders, 1);
   assert.equal(dashboard.overview.cancelledOrders, 1);
+});
+
+test("does not report legacy default-DEX orders as new all-DEX signals", () => {
+  const wallet = { traderName: "Wanyewest", hypurrscanUrl: "https://hypurrscan.io/address/0x1#orders", walletAddress: "0x1", status: "success" as const };
+  const previous = {
+    fetchedAt: "2026-11-12T00:00:00.000Z", source: "https://api.hyperliquid.xyz/info type=openOrders",
+    totalWallets: 1, successfulWallets: 1, failedWallets: 0, totalIndividualOrders: 0,
+    results: [{ ...wallet, orders: [] }],
+  };
+  const current = {
+    ...previous, fetchedAt: "2026-11-13T00:00:00.000Z",
+    source: "https://api.hyperliquid.xyz/info type=frontendOpenOrders dex=ALL_DEXS",
+    totalIndividualOrders: 1,
+    results: [{ ...wallet, orders: [{ coin: "xyz:NVDA", side: "B" as const, limitPx: "100", sz: "5", oid: 42 }] }],
+  };
+  const dashboard = buildOpenOrderDashboard(current, previous);
+  assert.equal(dashboard.snapshot.baselineReset, true);
+  assert.equal(dashboard.snapshot.previousFetchedAt, null);
+  assert.equal(dashboard.overview.addedOrders, 0);
+  assert.equal(dashboard.assets[0]?.bidNotional, 500);
 });
