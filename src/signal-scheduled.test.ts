@@ -78,6 +78,39 @@ test("scheduled refresh reports spot scrape failures as partial", async () => {
   assert.equal(result.status, "partial");
 });
 
+test("scheduled refresh retries failed signal traders within the same snapshot", async () => {
+  let retries = 0;
+  const result = await runScheduledRefresh({
+    traderLoader: async () => traders,
+    signalRunner: async () => ({
+      snapshotId: 168, tradersTotal: 106, tradersCompleted: 103,
+      tradersFailed: 3, totalPositions: 154, tradersRemaining: 0, status: "partial",
+    }),
+    signalRetryRunner: async (input, snapshotId) => {
+      assert.strictEqual(input, traders);
+      assert.equal(snapshotId, 168);
+      retries += 1;
+      return {
+        snapshotId, tradersTotal: 106, tradersCompleted: 106,
+        tradersFailed: 0, totalPositions: 154, tradersRemaining: 0, status: "success",
+      };
+    },
+    spotRunner: async () => ({
+      source: "github-action", snapshotId: 29, generatedAt: "2026-11-13T06:45:51.323Z",
+      tradersScanned: 106, tradersWithFilteredHoldings: 28, failures: 0,
+    }),
+    openOrderRunner: async () => ({
+      source: "github-action", snapshotId: 16, capturedAt: "2026-11-13T06:19:41.341Z",
+      tradersScanned: 106, failures: 0, totalOrders: 1592,
+    }),
+  });
+
+  assert.equal(retries, 1);
+  assert.equal(result.signal?.snapshotId, 168);
+  assert.equal(result.signal?.tradersCompleted, 106);
+  assert.equal(result.status, "success");
+});
+
 test("scheduler rejects empty, invalid or duplicate canonical registries before running", async () => {
   assert.throws(() => validateScheduledTraders([]), /registry is empty/);
   assert.throws(() => validateScheduledTraders([traders[0], traders[0]]), /duplicate/);

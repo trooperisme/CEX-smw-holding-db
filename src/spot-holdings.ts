@@ -11,6 +11,7 @@ import {
 } from "./spot-token-filter";
 import { loadTrackedTraders } from "./trader-registry";
 import { ScanLogger, TrackedTrader } from "./types";
+import { waitForFirecrawlSlot } from "./firecrawl-throttle";
 
 const execFileAsync = promisify(execFile);
 
@@ -57,9 +58,6 @@ export type SpotHoldingsScanSummary = {
 };
 
 type SpotScrapeRunner = (url: string, outputPath: string) => Promise<void>;
-
-let nextSpotFirecrawlRequestAt = 0;
-let spotFirecrawlThrottleTail = Promise.resolve();
 
 type RunSpotHoldingsScanOptions = {
   cwd?: string;
@@ -127,24 +125,6 @@ function isRetriableSpotScrapeError(error: unknown): boolean {
   );
 }
 
-async function waitForSpotFirecrawlSlot(): Promise<void> {
-  const minIntervalMs = parsePositiveInt(process.env.SPOT_HOLDING_FIRECRAWL_MIN_INTERVAL_MS, 6500);
-  if (minIntervalMs <= 0) return;
-
-  const previousTail = spotFirecrawlThrottleTail;
-  let releaseTail = () => {};
-  spotFirecrawlThrottleTail = new Promise<void>((resolve) => {
-    releaseTail = resolve;
-  });
-
-  await previousTail;
-  const now = Date.now();
-  const waitMs = Math.max(0, nextSpotFirecrawlRequestAt - now);
-  if (waitMs > 0) await sleep(waitMs);
-  nextSpotFirecrawlRequestAt = Date.now() + minIntervalMs;
-  releaseTail();
-}
-
 function shouldFetchHtml(filePath: string, forceRefetch: boolean, cacheTtlHours: number): boolean {
   if (forceRefetch || !fs.existsSync(filePath)) return true;
   const stat = fs.statSync(filePath);
@@ -197,7 +177,7 @@ async function runFirecrawlHttpSpotScrape(url: string, outputPath: string): Prom
     throw new Error("FIRECRAWL_API_KEY is required for server-side spot scraping");
   }
 
-  await waitForSpotFirecrawlSlot();
+  await waitForFirecrawlSlot();
 
   const timeoutMs = parsePositiveInt(process.env.SPOT_HOLDING_FIRECRAWL_TIMEOUT_MS, 60000);
   const response = await fetch("https://api.firecrawl.dev/v2/scrape", {

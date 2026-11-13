@@ -191,6 +191,35 @@ test("scrapeHypurrscanSignals uses the vault Positions data path", async () => {
   ]);
 });
 
+test("account scrape falls back to all-DEX positions after Firecrawl failure", async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "signals-account-fallback-"));
+  const previousRetryCount = process.env.HYPURRSCAN_SCRAPE_RETRY_COUNT;
+  process.env.HYPURRSCAN_SCRAPE_RETRY_COUNT = "0";
+  try {
+    let calledAddress = "";
+    const positions = await scrapeHypurrscanSignals({
+      traderName: "HIP-3 trader",
+      walletAddress: "0x8607a7d180de23645db594d90621d837749408d5",
+      hypurrscanUrl: "https://hypurrscan.io/address/0x8607a7d180de23645db594d90621d837749408d5#perps",
+      isActive: true,
+    }, {
+      cwd: tmpDir,
+      snapshotId: 168,
+      scrapeRunner: async () => { throw new Error("Firecrawl scrape failed (429)"); },
+      accountPositionRunner: async (address) => {
+        calledAddress = address;
+        return [{ token: "xyz:NVDA", side: "long", valueUsd: 1000 }];
+      },
+    });
+    assert.equal(calledAddress, "0x8607a7d180de23645db594d90621d837749408d5");
+    assert.equal(positions[0]?.token, "xyz:NVDA");
+    assert.equal(positions[0]?.valueUsd, 1000);
+  } finally {
+    if (previousRetryCount === undefined) delete process.env.HYPURRSCAN_SCRAPE_RETRY_COUNT;
+    else process.env.HYPURRSCAN_SCRAPE_RETRY_COUNT = previousRetryCount;
+  }
+});
+
 test("scrapeHypurrscanSignals retries transient Firecrawl retrieval failures", async () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "signals-firecrawl-retry-"));
   const previousRetryDelay = process.env.HYPURRSCAN_RETRY_DELAY_MS;

@@ -118,7 +118,7 @@ New on-demand signals dashboard:
 
 Scheduled refresh:
 - The preferred scheduler is GitHub Actions via `.github/workflows/cex-scheduled-refresh.yml`.
-- It runs once daily at nominally `01:00 UTC` (08:00 GMT+7). GitHub may delay scheduled jobs; use `workflow_dispatch` for an additional on-demand pass when intraday freshness matters.
+- It has a primary window at `19:17 UTC` (02:17 GMT+7 the next day) and a backup at `23:47 UTC` (06:47 GMT+7 the next day). The backup skips a full scan when all three snapshot types have succeeded for the Vietnam calendar day. GitHub may delay scheduled jobs; use `workflow_dispatch` when an additional intraday refresh is needed.
 - The worker writes a new snapshot through the same Firecrawl pipeline as the dashboard.
 - The dashboard keeps the newest successful snapshot published while a new snapshot is running or fails, and labels it with its capture time. It is a scheduled snapshot, not a live position feed.
 - GitHub Actions is the only production scheduler; do not add a second scheduler.
@@ -126,9 +126,12 @@ Scheduled refresh:
 ### GitHub Actions scheduler
 
 The scheduled refresh runs from GitHub Actions using
-`.github/workflows/cex-scheduled-refresh.yml`. It runs once daily at `01:00 UTC`
-(`08:00 GMT+7`) and can be started manually with `workflow_dispatch` when an
-additional intraday refresh is needed.
+`.github/workflows/cex-scheduled-refresh.yml`. It schedules a primary run at
+`19:17 UTC` (02:17 GMT+7 the next day) and a backup at `23:47 UTC` (06:47
+GMT+7 the next day). The daily guard checks successful signal, spot, and
+open-order snapshots before either scheduled run starts a full scan. Use
+`workflow_dispatch` for an additional intraday refresh or to retry failed
+signal traders in an existing snapshot.
 
 Configure these GitHub Actions Secrets before enabling the workflow:
 
@@ -136,9 +139,10 @@ Configure these GitHub Actions Secrets before enabling the workflow:
 - `SUPABASE_URL`
 - `SUPABASE_SERVICE_ROLE_KEY`
 
-Optional GitHub Actions Variables are `SIGNALS_REFRESH_CONCURRENCY`,
-`SPOT_HOLDING_CONCURRENCY`, `SPOT_HOLDING_MIN_USD`, and
-`SPOT_HOLDING_CACHE_TTL_HOURS`. The workflow builds the checked-out commit and
+Optional GitHub Actions Variables include `FIRECRAWL_MIN_INTERVAL_MS`
+(default `10000`, shared by signal and spot Firecrawl requests in one run),
+`SIGNALS_REFRESH_CONCURRENCY`, `SPOT_HOLDING_CONCURRENCY`,
+`SPOT_HOLDING_MIN_USD`, and `SPOT_HOLDING_CACHE_TTL_HOURS`. The workflow builds the checked-out commit and
 sets `REQUIRE_SUPABASE_STORAGE=1`, so it fails instead of silently writing to
 ephemeral SQLite. It fails unless the combined signal and spot refresh returns
 `success`.

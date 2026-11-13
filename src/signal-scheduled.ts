@@ -34,6 +34,7 @@ type ScheduledRefreshOptions = {
   logger?: (line: string) => void;
   traderLoader?: () => Promise<TrackedTrader[]>;
   signalRunner?: (traders: TrackedTrader[]) => Promise<RunSignalRefreshResult>;
+  signalRetryRunner?: (traders: TrackedTrader[], snapshotId: number) => Promise<RunSignalRefreshResult>;
   spotRunner?: (traders: TrackedTrader[]) => Promise<ScheduledSpotRefreshResult>;
   openOrderRunner?: (traders: TrackedTrader[]) => Promise<ScheduledOpenOrderRefreshResult>;
 };
@@ -139,13 +140,30 @@ export async function runScheduledRefresh(options: ScheduledRefreshOptions = {})
     (options.openOrderRunner || ((input) => refreshOpenOrdersInAction(logger, input)))(traders),
   ]);
 
-  const signal = signalOutcome.status === "fulfilled" ? signalOutcome.value : null;
+  let signal = signalOutcome.status === "fulfilled" ? signalOutcome.value : null;
   const spot = spotOutcome.status === "fulfilled" ? spotOutcome.value : null;
   const openOrders = openOrderOutcome.status === "fulfilled" ? openOrderOutcome.value : null;
+  let signalRetryError: unknown = null;
+  if (signal?.status === "partial" && signal.tradersFailed > 0) {
+    const retryRunner = options.signalRetryRunner || (options.signalRunner ? null :
+      (input: TrackedTrader[], snapshotId: number) => runSignalRefresh({
+        cwd, logger, snapshotId, traders: input, replaceTrackedTraders: false,
+        retryFailed: true, requireNonemptyOutput: true,
+      }));
+    if (retryRunner) {
+      logger(`Retrying ${signal.tradersFailed} failed signal trader(s) in snapshot #${signal.snapshotId}`);
+      try {
+        signal = await retryRunner(traders, signal.snapshotId);
+      } catch (error) {
+        signalRetryError = error;
+      }
+    }
+  }
   const errors = [
     ...(signalOutcome.status === "rejected" ? [`signal: ${errorMessage(signalOutcome.reason)}`] : []),
     ...(spotOutcome.status === "rejected" ? [`spot: ${errorMessage(spotOutcome.reason)}`] : []),
     ...(openOrderOutcome.status === "rejected" ? [`open-orders: ${errorMessage(openOrderOutcome.reason)}`] : []),
+    ...(signalRetryError ? [`signal retry: ${errorMessage(signalRetryError)}`] : []),
   ];
   if (signal && (signal.tradersTotal !== traders.length || signal.tradersCompleted !== traders.length ||
       signal.tradersFailed !== 0 || signal.tradersRemaining !== 0 || signal.totalPositions <= 0)) {
