@@ -155,8 +155,8 @@ function isHypurrscanVaultUrl(url: string): boolean {
   return /https?:\/\/[^/]*hypurrscan\.io\/vault\/0x[a-fA-F0-9]{40}(?:[/?#]|$)/i.test(String(url || ""));
 }
 
-function extractHypurrscanVaultAddress(url: string): string | null {
-  const match = String(url || "").match(/\/vault\/(0x[a-fA-F0-9]{40})(?:[/?#]|$)/i);
+function extractHypurrscanAccountAddress(url: string): string | null {
+  const match = String(url || "").match(/\/(?:address|vault)\/(0x[a-fA-F0-9]{40})(?:[/?#]|$)/i);
   return match?.[1].toLowerCase() || null;
 }
 
@@ -287,7 +287,7 @@ export async function scrapeHypurrscanSignals(
   const retryDelayMs = parsePositiveInt(process.env.HYPURRSCAN_RETRY_DELAY_MS, 1500);
   const scrapeRunner = options.scrapeRunner || runFirecrawlScrape;
   const vaultPositionRunner = options.vaultPositionRunner || runHypurrscanVaultPositions;
-  const vaultAddress = extractHypurrscanVaultAddress(trader.hypurrscanUrl);
+  const vaultAddress = extractHypurrscanAccountAddress(trader.hypurrscanUrl);
 
   let markdown = "";
   let positions: ParsedSignalPosition[] = [];
@@ -329,6 +329,13 @@ export async function scrapeHypurrscanSignals(
       positions = parsePerpsTable(markdown);
     } catch (error) {
       if (scrapeFailures >= scrapeRetryCount || !isRetriableScrapeError(error)) {
+        // Firecrawl can be rate-limited or time out. Read the same live
+        // clearinghouse state Hypurrscan uses so an empty position list is
+        // recorded as a verified zero-position run instead of a failed scrape.
+        if (vaultAddress) {
+          positions = await vaultPositionRunner(vaultAddress, outputPath);
+          break;
+        }
         throw error;
       }
       scrapeFailures += 1;
