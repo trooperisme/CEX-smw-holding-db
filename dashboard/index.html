@@ -5,6 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Hypurrscan Signals</title>
     <link rel="stylesheet" href="/dashboard/styles.css" />
+    <link rel="stylesheet" href="/dashboard/editorial.css" />
+    <link rel="stylesheet" href="/dashboard/market-health.css" />
   </head>
   <body>
     <div class="page-loader" id="page-loader" role="status" aria-live="polite">
@@ -26,6 +28,7 @@
         </div>
 
         <div class="hero-actions">
+          <button class="action-button theme-toggle" type="button" aria-label="Switch color theme">Light mode</button>
           <button class="action-button action-button--primary" id="refresh-button" type="button">
             Refresh Signals
           </button>
@@ -50,9 +53,38 @@
         <div class="summary-strip">
           <span class="pill" id="summary-status">Idle</span>
           <span class="pill" id="summary-traders">0 traders</span>
-          <span class="pill" id="summary-positions">0 positions</span>
-          <span class="pill" id="summary-zero-positions">0 zero-position traders</span>
         </div>
+      </section>
+
+      <section class="market-health" id="market-health" aria-labelledby="market-health-title">
+        <div class="market-health__topline">
+          <div class="market-health__title-block">
+            <span class="market-health__eyebrow">MARKET REGIME / CRYPTO BREADTH</span>
+            <h2 id="market-health-title">Is breadth at an extreme?</h2>
+          </div>
+          <div class="market-health__controls">
+            <span class="market-health__sample">LOADING MARKET DATA</span>
+            <span class="market-health__daily">DAILY</span>
+          </div>
+        </div>
+        <div class="market-health__readout" aria-live="polite">
+          <div class="market-health__regime"><span class="market-health__regime-dot"></span><span id="health-regime">DOWN EXTREME</span></div>
+          <strong id="health-message">Breadth is stretched to the downside</strong>
+          <p id="health-explanation">The latest breadth reading is being checked.</p>
+        </div>
+        <section class="btc-trend" aria-label="Bitcoin trend against USD">
+          <div class="btc-trend__label"><span>BTC <small>/ USD</small></span><small>PRICE DIRECTION</small></div>
+          <div class="btc-trend__metric" data-btc-period="daily"><small>DAILY · USD</small><strong class="btc-trend__state">UNAVAILABLE</strong><span class="btc-trend__streak">Streak unavailable</span></div>
+          <div class="btc-trend__metric" data-btc-period="weekly"><small>WEEKLY · USD</small><strong class="btc-trend__state">UNAVAILABLE</strong><span class="btc-trend__streak">Streak unavailable</span></div>
+          <div class="btc-trend__note"><a href="https://coinrotator.app/coin/bitcoin?tab=analysis" target="_blank" rel="noreferrer">CoinRotator ↗</a><span id="btc-trend-source">Loading source…</span></div>
+        </section>
+        <div class="market-health__chart-wrap">
+          <div class="market-health__legend"><span><i class="up"></i>UP</span><span><i class="down"></i>DOWN</span><span><i class="hold"></i>HODL</span><span class="market-health__chart-range">30D BREADTH HISTORY</span></div>
+          <div class="market-health__chart" id="health-chart" role="img" aria-label="30 day market breadth history with 60 percent extreme threshold"></div>
+          <div class="market-health__activity-label"><span>COINS CHANGED</span><span id="health-last-date">LATEST · NOV 12</span></div>
+          <div class="market-health__activity" id="health-activity" aria-label="Daily count of coins with changed regime"></div>
+        </div>
+        <div class="market-health__foot"><span>Loading CoinRotator data…</span><details><summary>How the extreme read works</summary><p>Each line is the share of reporting coins in that state. The dotted 60% line marks an extreme when UP or DOWN crosses it. HODL is the remaining share. This concept does not predict a reversal.</p></details></div>
       </section>
 
       <section class="table-panel">
@@ -85,5 +117,8 @@
       </section>
     </main>
     <script src="/dashboard/holdings.js" defer></script>
+    <script src="/dashboard/theme.js" defer></script>
+    <script src="/dashboard/market-health.js" defer></script>
+    <script src="/dashboard/btc-usd-trend.js" defer></script>
   </body>
 </html>

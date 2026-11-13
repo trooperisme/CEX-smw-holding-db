@@ -9,8 +9,6 @@ const els = {
   sortButtons: [],
   summaryStatus: document.getElementById("summary-status"),
   summaryTraders: document.getElementById("summary-traders"),
-  summaryPositions: document.getElementById("summary-positions"),
-  summaryZeroPositions: document.getElementById("summary-zero-positions"),
   tableTitle: document.getElementById("table-title"),
   tableSubtitle: document.getElementById("table-subtitle"),
   tableStatus: document.getElementById("table-status"),
@@ -48,6 +46,7 @@ const state = {
   orderSortKey: "net",
   orderSortDir: "desc",
   viewRequestId: 0,
+  marketPulse: null,
 };
 
 const MAX_VISIBLE_SNAPSHOTS = 5;
@@ -193,9 +192,7 @@ function updateSummary(snapshot, runSummary = null) {
   if (status === "partial" || status === "running") els.summaryStatus.classList.add("is-warning");
   if (status === "failed") els.summaryStatus.classList.add("is-danger");
 
-  els.summaryTraders.textContent = `${Number(snapshot?.traders_completed || 0)}/${Number(snapshot?.total_traders || 0)} traders`;
-  els.summaryPositions.textContent = `${Number(snapshot?.total_positions || 0)} positions`;
-  els.summaryZeroPositions.textContent = `${Number(runSummary?.zeroPositionCount || 0)} zero-position traders`;
+  els.summaryTraders.textContent = `${Number(snapshot?.traders_completed || 0)}/${Number(snapshot?.total_traders || 0)} traders scanned`;
 
   if (!snapshot) {
     els.heroMeta.textContent = "No signal snapshot yet. Trigger a manual refresh to gather positions.";
@@ -225,8 +222,6 @@ function updateSpotSummary(payload) {
   els.summaryStatus.className = "pill";
   els.summaryStatus.classList.add(generatedAt ? "is-success" : "is-warning");
   els.summaryTraders.textContent = generatedAt ? `${Number(summary.tradersScanned || 0)} traders` : "— traders";
-  els.summaryPositions.textContent = generatedAt ? `${Number(summary.keptHoldings || summary.relevantHoldings || 0)} spot holdings > ${fmtUsd(minUsd)}` : "— spot holdings";
-  els.summaryZeroPositions.textContent = generatedAt ? `${rows.length} non-stable tokens` : "— non-stable tokens";
 
   els.heroMeta.textContent = generatedAt
     ? `${fmtDate(generatedAt)} · Spot holdings ready`
@@ -265,8 +260,6 @@ function updateOrderSummary(payload) {
   els.summaryStatus.className = "pill";
   els.summaryStatus.classList.add(status === "available" ? "is-success" : "is-warning");
   els.summaryTraders.textContent = `${Number(snapshot.successfulWallets || 0)}/${Number(snapshot.totalWallets || 0)} wallets`;
-  els.summaryPositions.textContent = `${Number(snapshot.totalOrders || 0).toLocaleString()} open orders`;
-  els.summaryZeroPositions.textContent = `${fmtUsd(overview.bidNotional)} bids · ${fmtUsd(overview.askNotional)} asks`;
   els.heroMeta.textContent = snapshot.fetchedAt
     ? `Captured ${fmtDate(snapshot.fetchedAt)} · Native Hyperliquid openOrders · conditional liquidity, not holdings or fills`
     : "No native open-order snapshot is available yet.";
@@ -514,6 +507,7 @@ function renderPerpsTableHead() {
           <span class="sort-indicator" aria-hidden="true">-</span>
         </button>
       </th>
+      ${state.market === "crypto" ? '<th><span>Strength Against BTC</span><small>4h · 1d · 3d</small></th><th><span>Volume vs normal</span></th>' : ""}
     </tr>
   `;
 }
@@ -617,6 +611,8 @@ function buildSpotDrilldownCell(row) {
 }
 
 function renderTable() {
+  els.tableSubtitle.hidden = state.market === "crypto";
+  els.tableSubtitle.style.display = state.market === "crypto" ? "none" : "";
   if (isOrderView()) {
     renderOrderTable();
     return;
@@ -642,7 +638,7 @@ function renderTable() {
   if (!rows.length) {
     els.tableBody.innerHTML = `
       <tr>
-        <td colspan="5">
+        <td colspan="${state.market === "crypto" ? 7 : 5}">
           <div class="drilldown-panel">
             <div class="empty-note">No token signals available for this market and snapshot.</div>
           </div>
@@ -692,15 +688,35 @@ function renderTable() {
               <span>${escapeHtml(String(row.shortSmw))}</span>
             </div>
           </td>
+          ${state.market === "crypto" ? renderPulseCells(token) : ""}
         </tr>
         ${
           isOpen
-            ? `<tr class="drilldown-row"><td colspan="5">${buildDrilldownCell(token)}</td></tr>`
+            ? `<tr class="drilldown-row"><td colspan="${state.market === "crypto" ? 7 : 5}">${buildDrilldownCell(token)}${state.market === "crypto" ? buildPulseDetail(token) : ""}</td></tr>`
             : ""
         }
       `;
     })
     .join("");
+}
+
+function renderPulseCells(token) {
+  const coin = state.marketPulse?.coins?.find((item) => String(item.symbol || "").replace(/USDT$/i, "").toUpperCase() === token.replace(/^xyz:/i, "").toUpperCase());
+  if (!coin) return '<td class="pulse-muted">—</td><td class="pulse-muted">—</td>';
+  const fmt = (value) => {
+    const number = Number(value || 0);
+    const color = number < 0 ? "pulse-negative" : number > 0 ? "pulse-positive" : "pulse-neutral";
+    return `<span class="${color}">${number > 0 ? "+" : ""}${number.toFixed(2)} pp</span>`;
+  };
+  const windows = coin.windows || {};
+  return `<td class="pulse-swing"><span>4h ${fmt(windows["4h"]?.excess)}</span><span>1d ${fmt(windows["1d"]?.excess)}</span><span>3d ${fmt(windows["3d"]?.excess)}</span></td><td>${Number(coin.volumeRatio || 0).toFixed(1)}×</td>`;
+}
+
+function buildPulseDetail(token) {
+  const coin = state.marketPulse?.coins?.find((item) => String(item.symbol || "").replace(/USDT$/i, "").toUpperCase() === token.replace(/^xyz:/i, "").toUpperCase());
+  if (!coin) return '<div class="pulse-detail pulse-muted">No Pulse data for this market.</div>';
+  const age = state.marketPulse?.asOf ? new Date(state.marketPulse.asOf).toLocaleString() : "unknown";
+  return `<div class="pulse-detail"><strong>Market Pulse</strong><span>Completed candle: ${escapeHtml(age)}</span><a href="https://koalabot.io/pulse" target="_blank" rel="noreferrer">Open Pulse ↗</a></div>`;
 }
 
 function renderSpotTable() {
@@ -891,6 +907,7 @@ async function loadSnapshotRows() {
     }
     renderTable();
     updateCopyButton();
+    if (requestedMarket === "crypto") fetchJson("/api/market-pulse").then((payload) => { state.marketPulse = payload; renderTable(); }).catch(() => { state.marketPulse = null; });
   } catch (error) {
     if (requestId === state.viewRequestId) {
       failed = true;

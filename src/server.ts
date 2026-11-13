@@ -19,6 +19,7 @@ import { runSheetSyncToSupabase } from "./sync";
 import { loadTrackedTraders } from "./trader-registry";
 import { SignalMarketType, SignalTraderRunRecord } from "./types";
 import { loadDurableOpenOrderDashboard } from "./open-order-storage";
+import { getMarketHealthFeed } from "./market-health-feed";
 
 dotenv.config();
 
@@ -485,6 +486,14 @@ app.get("/api/health", (_req, res) => {
 });
 
 app.use("/api", requireSignalsAuth);
+app.get("/api/market-regime-breadth", async (_req, res) => {
+  try {
+    const feed = await getMarketHealthFeed();
+    res.set("Cache-Control", "private, max-age=300").json(feed);
+  } catch (error) {
+    res.status(503).json({ error: error instanceof Error ? error.message : "Market feed unavailable" });
+  }
+});
 
 app.get("/api/artifacts/file", (req, res) => {
   const requestedPath = typeof req.query.path === "string" ? req.query.path : "";
