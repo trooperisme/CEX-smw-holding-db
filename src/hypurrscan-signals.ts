@@ -3,12 +3,14 @@ import path from "node:path";
 import { ensureDirExists, resolveWorkspacePaths } from "./runtime-paths";
 import { TraderPosition, TraderPositionSide, TrackedTrader } from "./types";
 import { classifySignalMarketType } from "./trader-registry";
+import { waitForFirecrawlSlot } from "./firecrawl-throttle";
 
 type ScrapeHypurrscanOptions = {
   cwd: string;
   snapshotId: number;
   scrapeRunner?: FirecrawlScrapeRunner;
   vaultPositionRunner?: HypurrscanVaultPositionRunner;
+  accountPositionRunner?: HypurrscanVaultPositionRunner;
 };
 
 type FirecrawlScrapeRunner = (url: string, outputPath: string) => Promise<void>;
@@ -52,27 +54,6 @@ function createTimeoutSignal(timeoutMs: number): AbortSignal | undefined {
   const controller = new AbortController();
   setTimeout(() => controller.abort(), timeoutMs).unref?.();
   return controller.signal;
-}
-
-let nextFirecrawlRequestAt = 0;
-let firecrawlThrottleTail = Promise.resolve();
-
-async function waitForFirecrawlSlot(): Promise<void> {
-  const minIntervalMs = parsePositiveInt(process.env.HYPURRSCAN_FIRECRAWL_MIN_INTERVAL_MS, 6500);
-  if (minIntervalMs <= 0) return;
-
-  const previousTail = firecrawlThrottleTail;
-  let releaseTail = () => {};
-  firecrawlThrottleTail = new Promise<void>((resolve) => {
-    releaseTail = resolve;
-  });
-
-  await previousTail;
-  const now = Date.now();
-  const waitMs = Math.max(0, nextFirecrawlRequestAt - now);
-  if (waitMs > 0) await sleep(waitMs);
-  nextFirecrawlRequestAt = Date.now() + minIntervalMs;
-  releaseTail();
 }
 
 function cleanMarkdownCell(input: string): string {
@@ -274,6 +255,44 @@ async function runHypurrscanVaultPositions(
   return positions;
 }
 
+async function runHypurrscanAccountPositions(
+  accountAddress: string,
+  outputPath: string,
+): Promise<ParsedSignalPosition[]> {
+  const timeoutMs = parsePositiveInt(process.env.HYPURRSCAN_VAULT_TIMEOUT_MS, 30000);
+  const request = async (body: object): Promise<unknown> => {
+    const response = await fetch("https://api.hyperliquid.xyz/info", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+      signal: createTimeoutSignal(timeoutMs),
+    });
+    if (!response.ok) throw new Error(`Hyperliquid position fetch failed (${response.status})`);
+    return response.json();
+  };
+
+  const metas = await request({ type: "allPerpMetas" });
+  if (!Array.isArray(metas) || !metas.length) throw new Error("Hyperliquid returned no perp DEX metadata");
+  const dexes = Array.from(new Set(metas.flatMap((meta) =>
+    Array.isArray(meta?.universe)
+      ? meta.universe.flatMap((asset: { name?: string }) => {
+        const name = String(asset.name || "");
+        return name.includes(":") ? [name.split(":")[0]] : [];
+      })
+      : [],
+  )));
+  const states: Array<{ dex: string | null; payload: unknown }> = [];
+  for (const dex of [null, ...dexes]) {
+    const payload = await request({ type: "clearinghouseState", user: accountAddress, ...(dex ? { dex } : {}) });
+    if (!payload || !Array.isArray((payload as HypurrscanClearinghouseState).assetPositions)) {
+      throw new Error(`Hyperliquid returned invalid clearinghouse state for ${dex || "default"}`);
+    }
+    states.push({ dex, payload });
+  }
+  fs.writeFileSync(outputPath.replace(/\.md$/i, ".json"), JSON.stringify(states, null, 2), "utf-8");
+  return states.flatMap((state) => parseHypurrscanVaultPositions(state.payload));
+}
+
 export async function scrapeHypurrscanSignals(
   trader: TrackedTrader,
   options: ScrapeHypurrscanOptions,
@@ -287,6 +306,7 @@ export async function scrapeHypurrscanSignals(
   const retryDelayMs = parsePositiveInt(process.env.HYPURRSCAN_RETRY_DELAY_MS, 1500);
   const scrapeRunner = options.scrapeRunner || runFirecrawlScrape;
   const vaultPositionRunner = options.vaultPositionRunner || runHypurrscanVaultPositions;
+  const accountPositionRunner = options.accountPositionRunner || runHypurrscanAccountPositions;
   const vaultAddress = extractHypurrscanAccountAddress(trader.hypurrscanUrl);
 
   let markdown = "";
@@ -333,7 +353,7 @@ export async function scrapeHypurrscanSignals(
         // clearinghouse state Hypurrscan uses so an empty position list is
         // recorded as a verified zero-position run instead of a failed scrape.
         if (vaultAddress) {
-          positions = await vaultPositionRunner(vaultAddress, outputPath);
+          positions = await accountPositionRunner(vaultAddress, outputPath);
           break;
         }
         throw error;
