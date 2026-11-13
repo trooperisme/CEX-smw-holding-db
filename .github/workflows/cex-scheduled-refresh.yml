@@ -2,8 +2,9 @@ name: CEX scheduled refresh
 
 on:
   schedule:
-    # GitHub Actions uses UTC. The daily pass targets 08:00 GMT+7.
-    - cron: "0 1 * * *"
+    # UTC: 02:17 and 06:47 GMT+7. A backup retries a missed or incomplete daily scan.
+    - cron: "17 19 * * *"
+    - cron: "47 23 * * *"
   workflow_dispatch:
     inputs:
       sync_registry_only:
@@ -49,8 +50,16 @@ jobs:
           REQUIRE_SUPABASE_STORAGE: "1"
         run: npm run signals:registry:sync
 
+      - name: Check today's completed snapshot
+        id: daily_guard
+        if: github.event_name == 'schedule'
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+        run: npm run signals:scheduled:guard
+
       - name: Run scheduled refresh
-        if: ${{ !inputs.sync_registry_only }}
+        if: ${{ !inputs.sync_registry_only && (github.event_name != 'schedule' || steps.daily_guard.outputs.should_run == 'true') }}
         env:
           FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
