@@ -53,13 +53,13 @@ window.marketHealthPromise=fetch("/api/market-regime-breadth").then(async respon
 window.marketHealthPromise.then(payload=>{
   renderBreadth(liveBreadth(payload));
   document.querySelector(".market-health__activity-label span").textContent="DAILY CHANGE SERIES UNAVAILABLE";
-  document.querySelector(".market-health__sample").textContent="COINROTATOR · DAILY";
-  document.querySelector(".market-health__foot>span").textContent=`CoinRotator via Firecrawl · captured ${new Date(payload.capturedAt).toLocaleString()}`;
+  document.querySelector(".market-health__sample").textContent=payload.source?.startsWith("Shumi")?"SHUMI · DAILY":"COINROTATOR · DAILY";
+  document.querySelector(".market-health__foot>span").textContent=`${payload.source||"Market data"} · captured ${new Date(payload.capturedAt).toLocaleString()}`;
 }).catch(error=>{
   document.querySelector(".market-health__sample").textContent="MARKET DATA UNAVAILABLE";
   document.getElementById("health-regime").textContent="UNAVAILABLE";
   document.getElementById("health-message").textContent="Breadth reading unavailable";
   document.getElementById("health-explanation").textContent="The source could not be checked. Try again later.";
   document.getElementById("health-chart").textContent="No verified breadth history is available.";
-  document.querySelector(".market-health__foot>span").textContent="CoinRotator source unavailable";
+  document.querySelector(".market-health__foot>span").textContent="Market source unavailable";
 });

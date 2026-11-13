@@ -123,6 +123,12 @@ Scheduled refresh:
 - The dashboard keeps the newest successful snapshot published while a new snapshot is running or fails, and labels it with its capture time. It is a scheduled snapshot, not a live position feed.
 - GitHub Actions is the only production scheduler; do not add a second scheduler.
 
+Market regime dashboard:
+- The first dashboard request of each UTC day reads current UP/HODL/DOWN breadth from the Shumi `market/health` API using `SHUMI_API_KEY` and stores the result in Supabase for reuse that day.
+- The 30-day chart history and BTC USD daily/weekly trend come directly from CoinRotator's public pages. The latest chart point uses the Shumi breadth counts so the chart and regime answer agree.
+- Only a Shumi quota response (`402` or `429`) activates the existing CoinRotator Firecrawl fallback. Missing/invalid Shumi credentials or malformed data are reported as unavailable.
+- `FIRECRAWL_API_KEY` remains necessary for the fallback and for trader signal/spot scans. The regime endpoint is separate from the GitHub Actions trader scan.
+
 ### GitHub Actions scheduler
 
 The scheduled refresh runs from GitHub Actions using
