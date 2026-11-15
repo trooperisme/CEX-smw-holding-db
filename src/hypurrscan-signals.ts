@@ -36,6 +36,26 @@ type HypurrscanClearinghouseState = {
   }>;
 };
 
+const HYPERLIQUID_POSITION_INTERVAL_MS = 500;
+let nextPositionRequestAt = 0;
+let positionRequestTail = Promise.resolve();
+let perpDexesPromise: Promise<string[]> | null = null;
+
+async function waitForPositionRequestSlot(): Promise<void> {
+  const intervalMs = parsePositiveInt(process.env.HYPERLIQUID_POSITION_MIN_INTERVAL_MS, HYPERLIQUID_POSITION_INTERVAL_MS);
+  if (intervalMs === 0) return;
+  const previous = positionRequestTail;
+  let release = () => {};
+  positionRequestTail = new Promise<void>((resolve) => { release = resolve; });
+  await previous;
+  try {
+    await sleep(Math.max(0, nextPositionRequestAt - Date.now()));
+    nextPositionRequestAt = Date.now() + intervalMs;
+  } finally {
+    release();
+  }
+}
+
 function parsePositiveInt(value: string | undefined, fallback: number): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed >= 0 ? Math.floor(parsed) : fallback;
@@ -261,26 +281,47 @@ async function runHypurrscanAccountPositions(
 ): Promise<ParsedSignalPosition[]> {
   const timeoutMs = parsePositiveInt(process.env.HYPURRSCAN_VAULT_TIMEOUT_MS, 30000);
   const request = async (body: object): Promise<unknown> => {
-    const response = await fetch("https://api.hyperliquid.xyz/info", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-      signal: createTimeoutSignal(timeoutMs),
-    });
-    if (!response.ok) throw new Error(`Hyperliquid position fetch failed (${response.status})`);
-    return response.json();
+    for (let attempt = 1; attempt <= 3; attempt += 1) {
+      await waitForPositionRequestSlot();
+      try {
+        const response = await fetch("https://api.hyperliquid.xyz/info", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+          signal: createTimeoutSignal(timeoutMs),
+        });
+        if (response.ok) return response.json();
+        if (response.status !== 429 && response.status < 500) {
+          throw new Error(`Hyperliquid position fetch failed (${response.status})`);
+        }
+        if (attempt === 3) throw new Error(`Hyperliquid position fetch failed (${response.status})`);
+        const retryAfter = Number(response.headers.get("retry-after"));
+        await sleep(Number.isFinite(retryAfter) && retryAfter > 0 ? retryAfter * 1000 : attempt * 1000);
+      } catch (error) {
+        if (attempt === 3 || !isRetriableScrapeError(error)) throw error;
+        await sleep(attempt * 1000);
+      }
+    }
+    throw new Error("Hyperliquid position fetch exhausted retries");
   };
 
-  const metas = await request({ type: "allPerpMetas" });
-  if (!Array.isArray(metas) || !metas.length) throw new Error("Hyperliquid returned no perp DEX metadata");
-  const dexes = Array.from(new Set(metas.flatMap((meta) =>
-    Array.isArray(meta?.universe)
-      ? meta.universe.flatMap((asset: { name?: string }) => {
-        const name = String(asset.name || "");
-        return name.includes(":") ? [name.split(":")[0]] : [];
-      })
-      : [],
-  )));
+  if (!perpDexesPromise) {
+    perpDexesPromise = request({ type: "allPerpMetas" }).then((metas) => {
+      if (!Array.isArray(metas) || !metas.length) throw new Error("Hyperliquid returned no perp DEX metadata");
+      return Array.from(new Set(metas.flatMap((meta) =>
+        Array.isArray(meta?.universe)
+          ? meta.universe.flatMap((asset: { name?: string }) => {
+            const name = String(asset.name || "");
+            return name.includes(":") ? [name.split(":")[0]] : [];
+          })
+          : [],
+      )));
+    }).catch((error) => {
+      perpDexesPromise = null;
+      throw error;
+    });
+  }
+  const dexes = await perpDexesPromise;
   const states: Array<{ dex: string | null; payload: unknown }> = [];
   for (const dex of [null, ...dexes]) {
     const payload = await request({ type: "clearinghouseState", user: accountAddress, ...(dex ? { dex } : {}) });
@@ -364,8 +405,18 @@ export async function scrapeHypurrscanSignals(
       continue;
     }
 
-    if (positions.length > 0 || !looksLikeEmptyHypurrscanMarkdown(markdown) || emptyResponses >= emptyRetryCount) {
+    if (positions.length > 0) {
       break;
+    }
+
+    // A loaded page without a parseable table is not proof of zero positions.
+    // Verify every zero against the underlying clearinghouse before publishing it.
+    if (vaultAddress) {
+      positions = await accountPositionRunner(vaultAddress, outputPath);
+      break;
+    }
+    if (!looksLikeEmptyHypurrscanMarkdown(markdown) || emptyResponses >= emptyRetryCount) {
+      throw new Error("Cannot verify zero positions without a Hypurrscan account address");
     }
 
     emptyResponses += 1;

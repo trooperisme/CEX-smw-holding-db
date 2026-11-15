@@ -26,5 +26,5 @@ test("missing spot snapshot stays missing on the read-only dashboard", () => {
   assert.equal(elements.get("summary-traders").textContent, "— traders");
   assert.equal(elements.get("table-status").textContent, "Awaiting snapshot");
   assert.match(elements.get("table-body").innerHTML, /No completed spot snapshot/);
-  assert.equal(elements.get("refresh-button").textContent, "Scheduled at 08:00 GMT+7");
+  assert.equal(elements.get("refresh-button").textContent, "Daily scan via GitHub Actions");
 });

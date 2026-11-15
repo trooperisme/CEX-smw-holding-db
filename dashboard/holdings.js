@@ -47,6 +47,7 @@ const state = {
   orderSortDir: "desc",
   viewRequestId: 0,
   marketPulse: null,
+  marketPulseError: false,
 };
 
 const MAX_VISIBLE_SNAPSHOTS = 5;
@@ -233,7 +234,7 @@ function updateCopyButton() {
     els.refreshButton.textContent = isOrderView()
       ? "Scheduled order scan"
       : state.readOnlyHosted
-      ? "Scheduled at 08:00 GMT+7"
+      ? "Daily scan via GitHub Actions"
       : state.refreshRunning
       ? "Refreshing..."
       : isSpotView()
@@ -512,7 +513,7 @@ function renderPerpsTableHead() {
           <span class="sort-indicator" aria-hidden="true">-</span>
         </button>
       </th>
-      ${state.market === "crypto" ? '<th><span>Strength Against BTC</span><small>4h · 1d · 3d</small></th><th><span>Volume vs normal</span></th>' : ""}
+      ${state.market === "crypto" ? '<th><span>Strength Against BTC</span><small>Live · 4h · 1d · 3d</small></th><th><span>Volume vs normal</span><small>Live</small></th>' : ""}
     </tr>
   `;
 }
@@ -637,7 +638,10 @@ function renderTable() {
   els.tableSubtitle.textContent =
     `Snapshot #${state.selectedSnapshotId || "—"} token-level signals sorted by ${describeSort()}. ` +
     `${tradersWithPositionsCount} traders currently contribute rows; ${zeroPositionCount} scraped successfully with 0 open perps.`;
-  els.tableStatus.textContent = `${rows.length} rows`;
+  const pulseStatus = state.market !== "crypto" ? "" : state.marketPulseError
+    ? " · Market Pulse unavailable"
+    : state.marketPulse?.stale ? " · Market Pulse stale" : "";
+  els.tableStatus.textContent = `${rows.length} rows${pulseStatus}`;
   updateSortButtons();
 
   if (!rows.length) {
@@ -916,7 +920,19 @@ async function loadSnapshotRows() {
     }
     renderTable();
     updateCopyButton();
-    if (requestedMarket === "crypto") fetchJson("/api/market-pulse").then((payload) => { state.marketPulse = payload; renderTable(); }).catch(() => { state.marketPulse = null; });
+    if (requestedMarket === "crypto") {
+      fetchJson("/api/market-pulse").then((pulse) => {
+        if (requestId !== state.viewRequestId) return;
+        state.marketPulse = pulse;
+        state.marketPulseError = false;
+        renderTable();
+      }).catch(() => {
+        if (requestId !== state.viewRequestId) return;
+        state.marketPulse = null;
+        state.marketPulseError = true;
+        renderTable();
+      });
+    }
   } catch (error) {
     if (requestId === state.viewRequestId) {
       failed = true;
@@ -972,7 +988,7 @@ async function loadInitialData() {
     state.readOnlyHosted = Boolean(health.readOnly);
     if (health.readOnly && els.refreshButton) {
       els.refreshButton.disabled = true;
-      els.refreshButton.textContent = "Scheduled at 08:00 GMT+7";
+      els.refreshButton.textContent = "Daily scan via GitHub Actions";
       els.refreshButton.title = "Refreshes run from GitHub Actions and are read-only here.";
     }
   } catch {

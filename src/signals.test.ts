@@ -220,6 +220,45 @@ test("account scrape falls back to all-DEX positions after Firecrawl failure", a
   }
 });
 
+test("account scrape verifies an empty Firecrawl parse against Hyperliquid", async () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "signals-empty-verification-"));
+  const walletAddress = "0x1111111111111111111111111111111111111111";
+  const trader = {
+    traderName: "Missing table trader",
+    walletAddress,
+    hypurrscanUrl: `https://hypurrscan.io/address/${walletAddress}#perps`,
+    isActive: true,
+  };
+  let verified = 0;
+  const positions = await scrapeHypurrscanSignals(trader, {
+    cwd: tmpDir,
+    snapshotId: 170,
+    scrapeRunner: async (_url, outputPath) => {
+      fs.writeFileSync(outputPath, "Hypurrscan account overview loaded without a positions table", "utf8");
+    },
+    accountPositionRunner: async (address) => {
+      assert.equal(address, walletAddress);
+      verified += 1;
+      return [{ token: "BTC", side: "long", valueUsd: 1000 }];
+    },
+  });
+  assert.equal(verified, 1);
+  assert.equal(positions.length, 1);
+  assert.equal(positions[0].token, "BTC");
+
+  await assert.rejects(
+    scrapeHypurrscanSignals(trader, {
+      cwd: tmpDir,
+      snapshotId: 171,
+      scrapeRunner: async (_url, outputPath) => {
+        fs.writeFileSync(outputPath, "Hypurrscan account overview loaded without a positions table", "utf8");
+      },
+      accountPositionRunner: async () => { throw new Error("Hyperliquid unavailable"); },
+    }),
+    /Hyperliquid unavailable/,
+  );
+});
+
 test("scrapeHypurrscanSignals retries transient Firecrawl retrieval failures", async () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "signals-firecrawl-retry-"));
   const previousRetryDelay = process.env.HYPURRSCAN_RETRY_DELAY_MS;

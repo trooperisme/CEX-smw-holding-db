@@ -82,6 +82,7 @@ const AUTH_SECRET =
 const RUN_SYNCHRONOUSLY = Boolean(process.env.VERCEL);
 const READ_ONLY_HOSTED = Boolean(process.env.VERCEL);
 const HOSTED_MUTATION_ERROR = "Vercel is read-only; run refreshes through GitHub Actions";
+let marketPulseCache: { fetchedAt: number; payload: { asOf: string; coins: unknown[]; [key: string]: unknown } } | null = null;
 
 function rejectHostedMutation(res: express.Response): boolean {
   if (!READ_ONLY_HOSTED) return false;
@@ -486,6 +487,31 @@ app.get("/api/health", (_req, res) => {
 });
 
 app.use("/api", requireSignalsAuth);
+
+app.get("/api/market-pulse", async (_req, res) => {
+  if (marketPulseCache && Date.now() - marketPulseCache.fetchedAt < 60_000) {
+    res.set("Cache-Control", "private, no-store").json(marketPulseCache.payload);
+    return;
+  }
+  try {
+    const response = await fetch("https://koalabot.io/api/market-pulse", { signal: AbortSignal.timeout(8_000) });
+    if (!response.ok) throw new Error(`Market Pulse returned ${response.status}`);
+    const payload = await response.json() as { asOf?: unknown; coins?: unknown; [key: string]: unknown };
+    if (!payload || typeof payload.asOf !== "string" || !Array.isArray(payload.coins)) {
+      throw new Error("Market Pulse returned an invalid payload");
+    }
+    marketPulseCache = { fetchedAt: Date.now(), payload: payload as { asOf: string; coins: unknown[]; [key: string]: unknown } };
+    res.set("Cache-Control", "private, no-store").json(payload);
+  } catch (error) {
+    if (marketPulseCache) {
+      res.set("Cache-Control", "private, no-store").set("X-Pulse-Stale", "true")
+        .json({ ...marketPulseCache.payload, stale: true });
+      return;
+    }
+    res.status(502).json({ error: (error as Error)?.message || "Market Pulse unavailable" });
+  }
+});
+
 app.get("/api/market-regime-breadth", async (_req, res) => {
   try {
     const feed = await getMarketHealthFeed();
