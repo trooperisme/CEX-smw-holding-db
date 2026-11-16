@@ -19,7 +19,6 @@ import { runSheetSyncToSupabase } from "./sync";
 import { loadTrackedTraders } from "./trader-registry";
 import { SignalMarketType, SignalTraderRunRecord } from "./types";
 import { loadDurableOpenOrderDashboard } from "./open-order-storage";
-import { getMarketHealthFeed } from "./market-health-feed";
 
 dotenv.config();
 
@@ -509,15 +508,6 @@ app.get("/api/market-pulse", async (_req, res) => {
       return;
     }
     res.status(502).json({ error: (error as Error)?.message || "Market Pulse unavailable" });
-  }
-});
-
-app.get("/api/market-regime-breadth", async (_req, res) => {
-  try {
-    const feed = await getMarketHealthFeed();
-    res.set("Cache-Control", "private, max-age=300").json(feed);
-  } catch (error) {
-    res.status(503).json({ error: error instanceof Error ? error.message : "Market feed unavailable" });
   }
 });
 
