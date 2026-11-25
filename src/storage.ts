@@ -852,7 +852,7 @@ export function createStorage(cwd: string) {
       const rows = db
         .prepare(
           `
-          SELECT trader_name, wallet_address, side, value_usd
+          SELECT trader_name, wallet_address, source_url, side, value_usd
           FROM trader_positions
           WHERE snapshot_id = ? AND token = ?
           ORDER BY side ASC, value_usd DESC, trader_name ASC
@@ -861,6 +861,7 @@ export function createStorage(cwd: string) {
         .all(snapshotId, token) as any[];
 
       const mapped: TokenDrilldownRow[] = rows.map((row) => ({
+        sourceUrl: row.source_url || undefined,
         traderName: row.trader_name,
         walletAddress: row.wallet_address,
         side: row.side,
