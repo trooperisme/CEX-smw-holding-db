@@ -147,6 +147,7 @@ export type TokenSignalMetric = {
 };
 
 export type TokenDrilldownRow = {
+  sourceUrl?: string;
   traderName: string;
   walletAddress: string;
   side: TraderPositionSide;

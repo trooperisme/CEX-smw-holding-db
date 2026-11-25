@@ -368,7 +368,7 @@ function createSupabaseSignalStorage(): SignalStorage {
     async getTokenDrilldown(snapshotId, token) {
       const { data, error } = await supabase
         .from("trader_positions")
-        .select("trader_name,wallet_address,side,value_usd")
+        .select("trader_name,wallet_address,source_url,side,value_usd")
         .eq("snapshot_id", snapshotId)
         .eq("token", token)
         .order("side", { ascending: true })
@@ -377,6 +377,7 @@ function createSupabaseSignalStorage(): SignalStorage {
       assertNoSupabaseError(error, "Load token drilldown");
 
       const mapped: TokenDrilldownRow[] = (data || []).map((row: any) => ({
+        sourceUrl: row.source_url || undefined,
         traderName: row.trader_name,
         walletAddress: row.wallet_address,
         side: row.side,

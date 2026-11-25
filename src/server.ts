@@ -79,7 +79,7 @@ const AUTH_SECRET =
   process.env.APP_PASSWORD ||
   "local-signals-secret";
 const RUN_SYNCHRONOUSLY = Boolean(process.env.VERCEL);
-const READ_ONLY_HOSTED = Boolean(process.env.VERCEL);
+const READ_ONLY_HOSTED = Boolean(process.env.VERCEL) || process.env.LOCAL_UI_PREVIEW === "1";
 const HOSTED_MUTATION_ERROR = "Vercel is read-only; run refreshes through GitHub Actions";
 let marketPulseCache: { fetchedAt: number; payload: { asOf: string; coins: unknown[]; [key: string]: unknown } } | null = null;
 
@@ -477,6 +477,7 @@ app.get("/api/health", (_req, res) => {
   res.json({
     ok: true,
     readOnly: READ_ONLY_HOSTED,
+    localUiPreview: process.env.LOCAL_UI_PREVIEW === "1",
     running: runtime.running,
     syncRunning: runtime.syncRunning,
     jobsRunning: runtime.jobsRunning,
