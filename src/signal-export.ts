@@ -80,7 +80,7 @@ export function buildSignalMarkdownExport(input: SignalMarkdownExportInput): str
     `Snapshot: #${input.snapshot.id}`,
     `Market: ${input.market}`,
     `Status: ${input.snapshot.status}`,
-    `Captured at: ${timestamp}`,
+    `Timestamp: ${timestamp}`,
     `Trader coverage: ${Number(input.snapshot.traders_completed || 0)}/${Number(input.snapshot.total_traders || 0)} completed, ${failedCount} failed, ${zeroPositionCount} zero-position traders`,
     `Total positions: ${Number(input.snapshot.total_positions || 0)}`,
   ];
