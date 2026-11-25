@@ -118,12 +118,14 @@ test("parseHypurrscanMarkdown extracts open perp positions", () => {
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | [![](https://hypurrscan.io/perps/BTC.svg)BTC](https://hypurrscan.io/market/BTC) | **LONG** | 29X (cross) | **8,058,669.07$** | 120.37 | 109,632.30$ | 112,260.3$ | 66,950.00$ | -5,137,612.46$ | -307,917.18$ | 1,177.50$ |
 | [![](https://hypurrscan.io/perps/CL.svg)![](https://hypurrscan.io/XYZ.svg)xyz:CL](https://hypurrscan.io/market/xyz:CL) | **LONG** | 20X (isolated) | **576,852.72$** | 5.18K | 107.09$ | 107.00687$ | 111.43$ | 22,449.90$ | 795.03$ | 80.41$ |
+| [![](https://hypurrscan.io/perps/JIO.svg)![](https://hypurrscan.io/XYZ.svg)xyz:JIO](https://hypurrscan.io/market/xyz:JIO) | **LONG** | 2X (isolated) | **642.84$** | 49.40 | 12.99$ | 12.99494$ | 13.01$ | 1.00$ | 0.00$ | 7.2173$ |
 | [![](https://hypurrscan.io/perps/XRP.svg)XRP](https://hypurrscan.io/market/XRP) | **SHORT** | 20X (cross) | **77,108.48$** | -58.72K | 2.4848$ | 2.93781$ | 1.3132$ | 68,794.41$ | 26,699.76$ | 131.21$ |
 `;
 
   assert.deepEqual(parseHypurrscanMarkdown(markdown), [
     { token: "BTC", side: "long", valueUsd: 8058669.07 },
     { token: "xyz:CL", side: "long", valueUsd: 576852.72 },
+    { token: "xyz:JIO", side: "long", valueUsd: 642.84 },
     { token: "XRP", side: "short", valueUsd: 77108.48 },
   ]);
 });
@@ -627,6 +629,7 @@ test("buildSignalMarkdownExport formats current-market GPT copy payload", () => 
 
   assert.match(text, /Snapshot: #46/);
   assert.match(text, /Market: crypto/);
+  assert.match(text, /Captured at: 2026-06-13T07:50:00.000Z/);
   assert.match(text, /\| BTC \| \$1,200\.00 \| -1 \| 1 \| 2 \| \$500\.00 \| \$1,700\.00 \|/);
   assert.match(text, /Long:\n- Long Trader \(0x1111\.\.\.1111\): \$500\.00/);
   assert.match(text, /Short:\n- Short Trader \(0x2222\.\.\.2222\): \$1,700\.00/);

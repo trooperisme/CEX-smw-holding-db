@@ -21,6 +21,13 @@ const els = {
   viewLoaderMessage: document.getElementById("view-loader-message"),
   viewLoaderRetry: document.getElementById("view-loader-retry"),
   summaryStrip: document.querySelector(".summary-strip"),
+  summaryResults: document.getElementById("summary-results"),
+  overviewCaption: document.getElementById("overview-caption"),
+  metricGuideContent: document.getElementById("metric-guide-content"),
+  inspector: document.getElementById("inspector"),
+  inspectorContent: document.getElementById("inspector-content"),
+  inspectorClose: document.getElementById("inspector-close"),
+  inspectorBackdrop: document.getElementById("inspector-backdrop"),
 };
 
 const state = {
@@ -48,6 +55,7 @@ const state = {
   viewRequestId: 0,
   marketPulse: null,
   marketPulseError: false,
+  scheduledRefresh: null,
 };
 
 const MAX_VISIBLE_SNAPSHOTS = 5;
@@ -78,6 +86,100 @@ function marketLabel(market = state.market) {
   if (market === "spot") return "Spot";
   if (market === "orders") return "Limit";
   return "Crypto";
+}
+
+function updateReadout(count) {
+  if (typeof renderField === "function") queueMicrotask(renderField);
+  const noun = isOrderView() ? (count === 1 ? "asset" : "assets") : (count === 1 ? "token" : "tokens");
+  els.summaryResults.firstChild.textContent = `View ${count} ${noun} `;
+  els.summaryResults.disabled = count === 0;
+  els.overviewCaption.textContent = isOrderView()
+    ? "Live conditional liquidity across tracked wallets. Open an asset to inspect price levels."
+    : isSpotView()
+      ? "Spot exposure after the snapshot filter. Open a token to inspect holders."
+      : "Token exposure from the selected trader snapshot. Open a token to inspect long and short attribution.";
+  els.metricGuideContent.innerHTML = isOrderView()
+    ? "<p><strong>Delta</strong> is the absolute USD gap between live bids and asks; its side marks which is larger. These are open orders, not fills or holdings.</p><p><strong>Actors</strong> counts wallets with open orders in the asset.</p>"
+    : isSpotView()
+      ? "<p><strong>SMW holders</strong> counts tracked wallets holding the token. Total value sums filtered holdings; top holder is the largest single tracked position. Stable, unrelated, and low-value holdings are excluded.</p>"
+      : "<p><strong>SMW flows</strong> is the tracked-wallet long versus short signal in this snapshot. Holdings is aggregate USD exposure. Long and Short SMW count contributing wallets by side.</p><p><strong>Strength against BTC</strong> is percentage-point excess return over BTC across completed 4h, 1d and 3d windows. Volume vs normal is the current volume ratio. Pulse is market context, not a wallet signal.</p>";
+}
+
+function renderInspector() {
+  const selected = isOrderView() ? state.openOrderAsset : state.openToken;
+  if (!selected) {
+    els.inspectorContent.innerHTML = '<h2>Choose a signal</h2><p>Select a token or asset from the canvas to inspect its traders, price levels, and source context.</p>';
+    document.body.classList.remove("inspector-open", "has-inspector");
+    els.inspectorBackdrop.hidden = true;
+    els.inspector.removeAttribute("role");
+    els.inspector.removeAttribute("aria-modal");
+    return;
+  }
+  let introduction = "";
+  let evidence = "";
+  let method = "";
+  if (isOrderView()) {
+    const row = state.orderDashboard?.assets?.find((item) => item.asset === selected);
+    if (!row) return;
+    const net = orderNet(row);
+    introduction = `<p class="inspector-conclusion">${escapeHtml(net.label)} by ${escapeHtml(fmtUsd(net.amount))} in live order notional.</p><div class="inspector-facts"><span>Bids <b>${escapeHtml(fmtUsd(row.bidNotional))}</b></span><span>Asks <b>${escapeHtml(fmtUsd(row.askNotional))}</b></span><span>Wallets <b>${Number(row.wallets || 0)}</b></span></div>`;
+    evidence = buildOrderDetail(selected);
+    method = "Native Hyperliquid open orders are conditional liquidity. Delta is the absolute difference between live bid and ask notional; it does not measure executed flow.";
+  } else {
+    const row = state.rows.find((item) => String(item.token || "") === selected);
+    if (!row) return;
+    if (isSpotView()) {
+      introduction = `<p class="inspector-conclusion">${escapeHtml(fmtUsd(row.totalValueUsd))} held across ${Number(row.holdersCount || 0)} tracked ${Number(row.holdersCount || 0) === 1 ? "wallet" : "wallets"}.</p><div class="inspector-facts"><span>Top holder <b>${escapeHtml(fmtUsd(row.topHolderValueUsd))}</b></span></div>`;
+      evidence = buildSpotDrilldownCell(row);
+      method = "The spot view excludes stable, unrelated and low-value holdings according to the captured snapshot. Values are estimates at capture time.";
+    } else {
+      const netUsd = Number(row.longValueUsd || 0) - Number(row.shortValueUsd || 0);
+      const direction = netUsd > 0 ? "NET LONG" : netUsd < 0 ? "NET SHORT" : "USD BALANCED";
+      const smwFlow = Number(row.smwFlows || 0);
+      introduction = `<p class="inspector-conclusion">${direction} by ${escapeHtml(fmtUsd(Math.abs(netUsd)))} in USD positions.</p><div class="inspector-facts"><span>Long USD <b>${escapeHtml(fmtUsd(row.longValueUsd))}</b></span><span>Short USD <b>${escapeHtml(fmtUsd(row.shortValueUsd))}</b></span><span>SMW wallet balance <b>${smwFlow > 0 ? "+" : ""}${escapeHtml(String(smwFlow))} (${Number(row.longSmw || 0)} long / ${Number(row.shortSmw || 0)} short)</b></span></div>`;
+      evidence = buildDrilldownCell(selected) + (state.market === "crypto" ? buildPulseDetail(selected) : "");
+      method = "USD direction is aggregate long position value minus short position value; SMW wallet balance is long-wallet count minus short-wallet count, so the two can disagree. Trader attribution comes from the selected snapshot. Market Pulse uses separate completed candles.";
+    }
+  }
+  els.inspectorContent.innerHTML = `<h2>${escapeHtml(selected)}</h2>${introduction}<div class="inspector-section"><h3>Evidence / attribution</h3>${evidence}</div><details class="inspector-method"><summary>Method & limits</summary><p>${method}</p></details>`;
+  document.body.classList.add("has-inspector");
+}
+
+function closeInspector() {
+  const selected = isOrderView() ? state.openOrderAsset : state.openToken;
+  if (isOrderView()) state.openOrderAsset = null;
+  else state.openToken = null;
+  renderTable();
+  if (selected) {
+    const rows = Array.from(els.tableBody.querySelectorAll(isOrderView() ? ".order-grid--row" : ".token-trigger"));
+    const target = rows.find((row) => (isOrderView() ? row.dataset.orderAsset : row.dataset.token) === selected);
+    const tile = Array.from(document.querySelectorAll("[data-field-token]")).find((item) => item.dataset.fieldToken === selected);
+    (document.body.dataset.canvas === "table" ? target : tile || target)?.focus();
+  }
+}
+
+function openInspectorOnMobile() {
+  if (!window.matchMedia("(max-width: 920px)").matches) return;
+  // On compact screens, investigate inline beneath the selected ticker instead
+  // of covering the list with a modal sheet. A map selection becomes a row.
+  if (typeof setCanvasMode === "function") setCanvasMode("table");
+  document.body.classList.remove("inspector-open");
+  els.inspectorBackdrop.hidden = true;
+  els.inspector.removeAttribute("role");
+  els.inspector.removeAttribute("aria-modal");
+  revealSelectedPositionRow();
+}
+
+function revealSelectedPositionRow() {
+  const selected = isOrderView() ? state.openOrderAsset : state.openToken;
+  if (!selected) return;
+  const selector = isOrderView() ? ".order-row" : ".signal-row";
+  const row = Array.from(els.tableBody.querySelectorAll(selector)).find((item) =>
+    (isOrderView() ? item.dataset.orderAsset : item.dataset.token) === selected,
+  );
+  if (!row) return;
+  row.scrollIntoView({ behavior: "smooth", block: "center" });
+  row.querySelector("button")?.focus({ preventScroll: true });
 }
 
 function setViewLoading(loading, market = state.market) {
@@ -229,12 +331,19 @@ function updateSpotSummary(payload) {
     : "No completed spot holdings snapshot yet.";
 }
 
+function scheduledRefreshLabel() {
+  const schedule = state.scheduledRefresh;
+  return schedule?.primaryTime && schedule?.backupTime
+    ? `Daily ${schedule.primaryTime} · backup ${schedule.backupTime} GMT+7`
+    : "Daily scan via GitHub Actions";
+}
+
 function updateCopyButton() {
   if (els.refreshButton) {
     els.refreshButton.textContent = isOrderView()
       ? "Scheduled order scan"
       : state.readOnlyHosted
-      ? "Daily scan via GitHub Actions"
+      ? scheduledRefreshLabel()
       : state.refreshRunning
       ? "Refreshing..."
       : isSpotView()
@@ -329,7 +438,7 @@ function buildOrderLadder(orders, side) {
 }
 
 function buildOrderDetail(asset) {
-  const detail = state.orderDetails.get(asset);
+  const detail = state.orderDetails.get(orderDetailKey(asset));
   if (!detail) return '<div class="order-detail-loading">Loading exact price ladder…</div>';
   const walletRows = (detail.wallets || []).slice(0, 8).map((wallet) => {
     const side = wallet.side === "bid" ? "bid" : wallet.side === "ask" ? "ask" : "even";
@@ -353,6 +462,8 @@ function renderOrderTable() {
   const payload = state.orderDashboard;
   const rows = Array.isArray(payload?.assets) ? payload.assets : [];
   const sortedRows = sortedOrderRows(rows);
+  updateReadout(rows.length);
+  queueMicrotask(renderInspector);
   const overview = payload?.overview || {};
   const hasPrevious = Boolean(payload?.snapshot?.previousFetchedAt);
   els.tableTitle.textContent = "Limit";
@@ -396,7 +507,7 @@ function renderOrderTable() {
       const net = orderNet(row);
       return `
         <tr class="order-row ${open ? "is-open" : ""}" data-order-asset="${escapeHtml(row.asset)}"><td>
-          <button class="order-grid order-grid--row" type="button" data-order-asset="${escapeHtml(row.asset)}">
+          <button class="order-grid order-grid--row" type="button" data-order-asset="${escapeHtml(row.asset)}" aria-expanded="${open}" aria-controls="inspector-content">
             <span class="order-asset"><b>${escapeHtml(row.displayName)}</b><small>${row.displayName !== row.asset ? `${escapeHtml(row.asset)} · ` : ""}${escapeHtml(hasPrevious ? orderSignal(row) : net.label)}</small></span>
             <span class="order-metric order-metric--bid" data-label="Live bids"><b>${escapeHtml(fmtUsd(row.bidNotional))}</b><small>${row.bidMin ?? "—"}–${row.bidMax ?? "—"}</small></span>
             <span class="order-metric order-metric--ask" data-label="Live asks"><b>${escapeHtml(fmtUsd(row.askNotional))}</b><small>${row.askMin ?? "—"}–${row.askMax ?? "—"}</small></span>
@@ -545,7 +656,7 @@ function renderSpotTableHead() {
 }
 
 function buildDrilldownCell(token) {
-  const cached = state.drilldowns.get(token);
+  const cached = state.drilldowns.get(drilldownKey(token));
   if (!cached) {
     return `
       <div class="drilldown-panel">
@@ -617,6 +728,8 @@ function buildSpotDrilldownCell(row) {
 }
 
 function renderTable() {
+  document.body.dataset.market = state.market;
+  queueMicrotask(renderInspector);
   els.tableSubtitle.hidden = state.market === "crypto";
   els.tableSubtitle.style.display = state.market === "crypto" ? "none" : "";
   if (isOrderView()) {
@@ -632,6 +745,7 @@ function renderTable() {
 
   renderPerpsTableHead();
   const rows = Array.isArray(state.rows) ? getSortedRows(state.rows) : [];
+  updateReadout(rows.length);
   els.tableTitle.textContent = state.market === "crypto" ? "Crypto" : "TradFi";
   const tradersWithPositionsCount = Number(state.runSummary?.tradersWithPositionsCount || 0);
   const zeroPositionCount = Number(state.runSummary?.zeroPositionCount || 0);
@@ -669,13 +783,13 @@ function renderTable() {
       return `
         <tr class="signal-row ${isOpen ? "is-open" : ""}" data-token="${escapeHtml(token)}">
           <td>
-            <div class="token-cell">
+            <button class="token-cell token-trigger" type="button" data-token="${escapeHtml(token)}" aria-expanded="${isOpen}" aria-controls="inspector-content" aria-label="Inspect ${escapeHtml(token)}">
               <div class="token-badge">${escapeHtml(token.slice(0, 2).toUpperCase() || "?")}</div>
               <div class="token-text">
                 <div class="token-name">${escapeHtml(token)}</div>
                 <div class="token-sub">Click to view long and short traders</div>
               </div>
-            </div>
+            </button>
           </td>
           <td>
             <div class="metric-value ${row.smwFlows < 0 ? "metric-value--negative" : ""}" style="--fill:${(Math.abs(row.smwFlows) / maxFlows) * 100}%">
@@ -710,27 +824,30 @@ function renderTable() {
 }
 
 function renderPulseCells(token) {
+  if (state.marketPulseError || state.marketPulse?.unavailable) return '<td class="pulse-muted">—</td><td class="pulse-muted">—</td>';
   const coin = state.marketPulse?.coins?.find((item) => String(item.symbol || "").replace(/USDT$/i, "").toUpperCase() === token.replace(/^xyz:/i, "").toUpperCase());
   if (!coin) return '<td class="pulse-muted">—</td><td class="pulse-muted">—</td>';
   const fmt = (value) => {
-    const number = Number(value || 0);
+    if (value == null || !Number.isFinite(Number(value))) return '<span class="pulse-muted">—</span>';
+    const number = Number(value);
     const color = number < 0 ? "pulse-negative" : number > 0 ? "pulse-positive" : "pulse-neutral";
     return `<span class="${color}">${number > 0 ? "+" : ""}${number.toFixed(2)} pp</span>`;
   };
   const windows = coin.windows || {};
-  return `<td class="pulse-swing"><span>4h ${fmt(windows["4h"]?.excess)}</span><span>1d ${fmt(windows["1d"]?.excess)}</span><span>3d ${fmt(windows["3d"]?.excess)}</span></td><td>${Number(coin.volumeRatio || 0).toFixed(1)}×</td>`;
+  return `<td class="pulse-swing"><span>4h ${fmt(windows["4h"]?.excess)}</span><span>1d ${fmt(windows["1d"]?.excess)}</span><span>3d ${fmt(windows["3d"]?.excess)}</span></td><td>${(coin.volumeRatio == null || !Number.isFinite(Number(coin.volumeRatio)) ? "—" : Number(coin.volumeRatio).toFixed(1))}×</td>`;
 }
 
 function buildPulseDetail(token) {
   const coin = state.marketPulse?.coins?.find((item) => String(item.symbol || "").replace(/USDT$/i, "").toUpperCase() === token.replace(/^xyz:/i, "").toUpperCase());
   if (!coin) return '<div class="pulse-detail pulse-muted">No Pulse data for this market.</div>';
   const age = state.marketPulse?.asOf ? new Date(state.marketPulse.asOf).toLocaleString() : "unknown";
-  return `<div class="pulse-detail"><strong>Market Pulse</strong><span>Completed candle: ${escapeHtml(age)}</span><a href="https://koalabot.io/pulse" target="_blank" rel="noreferrer">Open Pulse ↗</a></div>`;
+  return `<div class="pulse-detail"><strong>Market Pulse</strong><span>${state.marketPulse.stale ? "Cached data · " : ""}Completed candle: ${escapeHtml(age)}</span><a href="https://koalabot.io/pulse" target="_blank" rel="noreferrer">Open Pulse ↗</a></div>`;
 }
 
 function renderSpotTable() {
   renderSpotTableHead();
   const rows = Array.isArray(state.rows) ? getSortedRows(state.rows) : [];
+  updateReadout(rows.length);
   const summary = state.spotSummary || {};
   const filteredOut = summary.filteredOut || {};
   const filteredCount =
@@ -777,13 +894,13 @@ function renderSpotTable() {
       return `
         <tr class="signal-row ${isOpen ? "is-open" : ""}" data-token="${escapeHtml(token)}">
           <td>
-            <div class="token-cell">
+            <button class="token-cell token-trigger" type="button" data-token="${escapeHtml(token)}" aria-expanded="${isOpen}" aria-controls="inspector-content" aria-label="Inspect ${escapeHtml(token)}">
               <div class="token-badge">${escapeHtml(token.slice(0, 2).toUpperCase() || "?")}</div>
               <div class="token-text">
                 <div class="token-name">${escapeHtml(token)}</div>
                 <div class="token-sub">Click to view spot holders</div>
               </div>
-            </div>
+            </button>
           </td>
           <td>
             <div class="metric-value" style="--fill:${(Number(row.holdersCount || 0) / maxHolders) * 100}%">
@@ -920,19 +1037,7 @@ async function loadSnapshotRows() {
     }
     renderTable();
     updateCopyButton();
-    if (requestedMarket === "crypto") {
-      fetchJson("/api/market-pulse").then((pulse) => {
-        if (requestId !== state.viewRequestId) return;
-        state.marketPulse = pulse;
-        state.marketPulseError = false;
-        renderTable();
-      }).catch(() => {
-        if (requestId !== state.viewRequestId) return;
-        state.marketPulse = null;
-        state.marketPulseError = true;
-        renderTable();
-      });
-    }
+    if (requestedMarket === "crypto") void loadMarketPulse(requestId);
   } catch (error) {
     if (requestId === state.viewRequestId) {
       failed = true;
@@ -944,6 +1049,20 @@ async function loadSnapshotRows() {
   } finally {
     if (requestId === state.viewRequestId && !failed) setViewLoading(false, requestedMarket);
   }
+}
+
+async function loadMarketPulse(requestId = state.viewRequestId) {
+  try {
+    const pulse = await fetchJson("/api/market-pulse");
+    if (requestId !== state.viewRequestId || state.market !== "crypto") return;
+    state.marketPulse = pulse;
+    state.marketPulseError = Boolean(pulse.unavailable);
+  } catch {
+    if (requestId !== state.viewRequestId || state.market !== "crypto") return;
+    state.marketPulse = null;
+    state.marketPulseError = true;
+  }
+  renderTable();
 }
 
 async function copyTextToClipboard(text) {
@@ -986,9 +1105,10 @@ async function loadInitialData() {
   try {
     const health = await fetchJson("/api/health");
     state.readOnlyHosted = Boolean(health.readOnly);
+    state.scheduledRefresh = health.scheduledRefresh || null;
     if (health.readOnly && els.refreshButton) {
       els.refreshButton.disabled = true;
-      els.refreshButton.textContent = "Daily scan via GitHub Actions";
+      els.refreshButton.textContent = scheduledRefreshLabel();
       els.refreshButton.title = "Refreshes run from GitHub Actions and are read-only here.";
     }
   } catch {
@@ -1013,20 +1133,42 @@ els.viewLoaderRetry.addEventListener("click", () => {
   void loadSnapshotRows().catch(() => {});
 });
 
+function drilldownKey(token) {
+  return JSON.stringify([state.selectedSnapshotId, state.market, token]);
+}
+
+function orderDetailKey(asset) {
+  return JSON.stringify([state.orderDashboard?.snapshot?.fetchedAt || null, asset]);
+}
+
 async function ensureDrilldown(token) {
-  if (!state.selectedSnapshotId || state.drilldowns.has(token)) return;
-  const payload = await fetchJson(
-    `/api/signals/${state.selectedSnapshotId}/token/${encodeURIComponent(token)}`,
-  );
-  state.drilldowns.set(token, payload);
-  renderTable();
+  const snapshotId = state.selectedSnapshotId;
+  const market = state.market;
+  const requestId = state.viewRequestId;
+  const key = drilldownKey(token);
+  if (!snapshotId || state.drilldowns.has(key)) return;
+  try {
+    const payload = await fetchJson(`/api/signals/${snapshotId}/token/${encodeURIComponent(token)}`);
+    if (requestId !== state.viewRequestId || snapshotId !== state.selectedSnapshotId || market !== state.market) return;
+    state.drilldowns.set(key, payload);
+    renderTable();
+  } catch (error) {
+    if (requestId === state.viewRequestId && snapshotId === state.selectedSnapshotId && market === state.market) throw error;
+  }
 }
 
 async function ensureOrderDetail(asset) {
-  if (state.orderDetails.has(asset)) return;
-  const payload = await fetchJson(`/api/open-orders/${encodeURIComponent(asset)}`);
-  state.orderDetails.set(asset, payload.detail);
-  renderTable();
+  const requestId = state.viewRequestId;
+  const key = orderDetailKey(asset);
+  if (state.orderDetails.has(key)) return;
+  try {
+    const payload = await fetchJson(`/api/open-orders/${encodeURIComponent(asset)}`);
+    if (requestId !== state.viewRequestId || state.market !== "orders" || key !== orderDetailKey(asset)) return;
+    state.orderDetails.set(key, payload.detail);
+    renderTable();
+  } catch (error) {
+    if (requestId === state.viewRequestId && state.market === "orders" && key === orderDetailKey(asset)) throw error;
+  }
 }
 
 async function pollRefresh(snapshotId) {
@@ -1266,6 +1408,7 @@ for (const button of els.marketTabs) {
     setOrderControls(isOrderView());
     for (const candidate of els.marketTabs) {
       candidate.classList.toggle("is-active", candidate === button);
+      candidate.setAttribute("aria-pressed", String(candidate === button));
     }
     try {
       await loadSnapshotRows();
@@ -1295,7 +1438,11 @@ els.tableBody.addEventListener("click", async (event) => {
     if (!asset) return;
     state.openOrderAsset = state.openOrderAsset === asset ? null : asset;
     renderTable();
-    if (state.openOrderAsset === asset) await ensureOrderDetail(asset);
+    if (state.openOrderAsset === asset) openInspectorOnMobile();
+    if (state.openOrderAsset === asset) {
+      await ensureOrderDetail(asset);
+      if (window.matchMedia("(max-width: 920px)").matches) revealSelectedPositionRow();
+    }
     return;
   }
   const row = event.target.closest(".signal-row");
@@ -1304,11 +1451,37 @@ els.tableBody.addEventListener("click", async (event) => {
   if (!token) return;
   state.openToken = state.openToken === token ? null : token;
   renderTable();
+  if (state.openToken === token) openInspectorOnMobile();
   if (isSpotView()) return;
   if (state.openToken === token) {
     await ensureDrilldown(token);
+    if (window.matchMedia("(max-width: 920px)").matches) revealSelectedPositionRow();
   }
 });
+
+els.summaryResults.addEventListener("click", () => {
+  if (typeof setCanvasMode === "function") setCanvasMode("table");
+  document.getElementById("signal-list").scrollIntoView({ behavior: "smooth", block: "start" });
+  const first = els.tableBody.querySelector(isOrderView() ? ".order-grid--row" : ".token-trigger");
+  first?.focus({ preventScroll: true });
+});
+els.inspectorClose.addEventListener("click", closeInspector);
+els.inspectorBackdrop.addEventListener("click", closeInspector);
+document.addEventListener("keydown", (event) => {
+  if (!document.body.classList.contains("inspector-open")) return;
+  if (event.key === "Escape") { closeInspector(); return; }
+  if (event.key !== "Tab") return;
+  const focusable = Array.from(els.inspector.querySelectorAll('button:not([disabled]), a[href], summary, input, select, [tabindex]:not([tabindex="-1"])')).filter((element) => element.getClientRects().length);
+  if (!focusable.length) return;
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+  else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+});
+
+setInterval(() => {
+  if (!document.hidden && state.market === "crypto" && els.viewLoader.hidden) void loadMarketPulse();
+}, 60_000);
 
 void loadInitialData().catch((error) => {
   setPageLoading(true, (error && error.message) || String(error), true);

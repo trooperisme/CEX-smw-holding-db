@@ -83,7 +83,7 @@ function loadTrackedWallets(filePath: string): TrackedWallet[] {
     const values = parseCsvLine(line);
     const traderName = values[traderIndex] || "";
     const originalUrl = values[urlIndex] || "";
-    const match = originalUrl.match(/\/address\/(0x[a-fA-F0-9]{40})(?:[/?#]|$)/);
+    const match = originalUrl.match(/\/(?:address|vault)\/(0x[a-fA-F0-9]{40})(?:[/?#]|$)/);
     if (!traderName || !originalUrl || !match) continue;
 
     const walletAddress = match[1].toLowerCase();

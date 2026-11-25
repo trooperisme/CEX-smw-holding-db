@@ -38,6 +38,20 @@ function setStatus(text) {
   els.scanStatus.textContent = text;
 }
 
+function emptyRow(columns, message) {
+  const cell = document.createElement("td");
+  cell.colSpan = columns;
+  cell.className = "admin-empty";
+  cell.textContent = message;
+  const row = document.createElement("tr");
+  row.appendChild(cell);
+  return row;
+}
+
+function showEmpty(tbody, columns, message) {
+  tbody.replaceChildren(emptyRow(columns, message));
+}
+
 function renderSnapshotOptions() {
   const optionsHtml = scans
     .map(
@@ -83,6 +97,7 @@ function renderClusters() {
       `;
     })
     .join("");
+  if (!filtered.length) showEmpty(els.clusterBody, 6, q ? "No clusters match this search." : "No clusters in this snapshot.");
 }
 
 async function loadClusters(snapshotId) {
@@ -101,7 +116,7 @@ async function loadWallets(snapshotId) {
   if (wallets.length) {
     await loadWallet(snapshotId, wallets[0]);
   } else {
-    els.walletBody.innerHTML = "";
+    showEmpty(els.walletBody, 4, "No wallets in this snapshot.");
     els.walletExtra.textContent = "No wallets in this snapshot.";
   }
 }
@@ -123,6 +138,7 @@ async function loadWallet(snapshotId, walletLabel) {
     `,
     )
     .join("");
+  if (!holdings.length) showEmpty(els.walletBody, 4, "No holdings for this wallet.");
 
   const screenshot = payload.scanRecord?.screenshot_path;
   if (screenshot) {
@@ -160,6 +176,7 @@ async function loadDiff() {
       `;
     })
     .join("");
+  if (!(payload.changes || []).length) showEmpty(els.diffBody, 6, "No changes between these snapshots.");
 }
 
 async function refreshScans() {
@@ -175,8 +192,9 @@ async function refreshScans() {
     await loadWallets(selected);
   } else {
     els.lastScan.textContent = "No scan history yet.";
-    els.clusterBody.innerHTML = "";
-    els.walletBody.innerHTML = "";
+    showEmpty(els.clusterBody, 6, "No scan history yet.");
+    showEmpty(els.walletBody, 4, "No scan history yet.");
+    showEmpty(els.diffBody, 6, "Select two snapshots to compare.");
   }
 }
 
@@ -231,4 +249,14 @@ async function boot() {
   }, 15_000);
 }
 
-void boot();
+setStatus("Loading");
+showEmpty(els.clusterBody, 6, "Loading clusters…");
+showEmpty(els.walletBody, 4, "Loading wallets…");
+showEmpty(els.diffBody, 6, "Select two snapshots to compare.");
+void boot().catch((error) => {
+  setStatus("Load failed");
+  els.lastScan.textContent = (error && error.message) || String(error);
+  showEmpty(els.clusterBody, 6, "Could not load scan data. Reload to retry.");
+  showEmpty(els.walletBody, 4, "Could not load wallet data. Reload to retry.");
+  showEmpty(els.diffBody, 6, "Could not load comparison data.");
+});
