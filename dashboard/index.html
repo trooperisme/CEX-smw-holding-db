@@ -6,6 +6,7 @@
     <title>Hypurrscan Signals</title>
     <link rel="stylesheet" href="/dashboard/styles.css" />
     <link rel="stylesheet" href="/dashboard/editorial.css" />
+    <link rel="stylesheet" href="/dashboard/observatory.css" />
   </head>
   <body>
     <div class="page-loader" id="page-loader" role="status" aria-live="polite">
@@ -19,10 +20,10 @@
       </button>
     </div>
     <main class="app-shell">
-      <section class="hero-panel">
+      <section class="hero-panel" aria-labelledby="app-title">
         <div class="hero-copy">
-          <p class="eyebrow">Tracked Trader Signals</p>
-          <h1>Hypurrscan Signals</h1>
+          <p class="eyebrow">CEX / SMW HOLDING</p>
+          <h1 id="app-title">The observatory<span class="title-mark">.</span></h1>
           <p class="hero-meta" id="hero-meta">Loading latest snapshot...</p>
         </div>
 
@@ -35,18 +36,18 @@
         </div>
       </section>
 
-      <section class="control-panel">
+      <section class="control-panel" aria-label="Dataset controls">
         <div class="control-block">
           <label class="field-label" for="snapshot-select">Snapshot</label>
           <select id="snapshot-select"></select>
         </div>
         <div class="control-block">
           <span class="field-label">View</span>
-          <div class="tab-list" id="market-tabs">
-            <button class="tab-button is-active" type="button" data-market="crypto">Crypto</button>
-            <button class="tab-button" type="button" data-market="tradfi">TradFi</button>
-            <button class="tab-button" type="button" data-market="spot">Spot</button>
-            <button class="tab-button" type="button" data-market="orders">Limit</button>
+          <div class="tab-list" id="market-tabs" role="group" aria-label="Market view">
+            <button class="tab-button is-active" type="button" data-market="crypto" aria-pressed="true">Crypto</button>
+            <button class="tab-button" type="button" data-market="tradfi" aria-pressed="false">TradFi</button>
+            <button class="tab-button" type="button" data-market="spot" aria-pressed="false">Spot</button>
+            <button class="tab-button" type="button" data-market="orders" aria-pressed="false">Limit</button>
           </div>
         </div>
         <div class="summary-strip">
@@ -55,7 +56,13 @@
         </div>
       </section>
 
-      <section class="table-panel">
+      <section class="signal-overview" aria-label="Current result">
+        <div><span class="section-index">02 / CURRENT READOUT</span><p id="overview-caption">Select a market to inspect the latest captured signals.</p></div>
+        <button class="result-link" id="summary-results" type="button" aria-controls="signal-list">View 0 rows <span aria-hidden="true">↗</span></button>
+      </section>
+
+      <div class="workspace-grid">
+      <section class="table-panel" id="signal-list" aria-labelledby="table-title">
         <div class="view-loader" id="view-loader" role="status" aria-live="polite" hidden>
           <span class="loader-mark" aria-hidden="true"></span>
           <strong id="view-loader-message">Loading Crypto…</strong>
@@ -63,6 +70,7 @@
         </div>
         <div class="table-topline">
           <div>
+            <span class="section-index">03 / SIGNAL CANVAS</span>
             <h2 id="table-title">Crypto</h2>
             <p id="table-subtitle">Latest token-level signals from your tracked traders.</p>
           </div>
@@ -76,15 +84,36 @@
 
         <div class="status-banner" id="status-banner" hidden></div>
 
+        <div class="canvas-toolbar"><div class="canvas-modes" role="group" aria-label="Visualization"><button type="button" data-canvas="map" aria-pressed="true">Exposure map</button><button type="button" data-canvas="table" aria-pressed="false">Data table</button></div><span id="field-scope"></span></div>
+        <section id="exposure-field" aria-label="Exposure map">
+          <div class="field-legend"><span>AREA / USD EXPOSURE</span><span>SELECT A REGION TO INVESTIGATE ↗</span></div>
+          <div id="field-map" class="field-map"></div>
+          <p class="field-key" id="field-key"></p>
+          <div class="field-footer"><span id="field-coverage"></span><span>Snapshot data · not a live feed</span></div>
+        </section>
+
+        <details class="metric-guide" id="metric-guide">
+          <summary>How to read these metrics <span aria-hidden="true">+</span></summary>
+          <div id="metric-guide-content"></div>
+        </details>
+
         <div class="table-wrap">
           <table class="signals-table">
+            <caption class="sr-only">Signals for the selected market and snapshot; activate a row to inspect its evidence.</caption>
             <thead id="table-head"></thead>
             <tbody id="table-body"></tbody>
           </table>
         </div>
       </section>
+      <aside class="inspector" id="inspector" aria-label="Signal details">
+        <div class="inspector-heading"><span class="section-index">04 / INVESTIGATION</span><button class="inspector-close" id="inspector-close" type="button" aria-label="Close details">×</button></div>
+        <div id="inspector-content" aria-live="polite"><h2>Choose a signal</h2><p>Select a token or asset from the canvas to inspect its traders, price levels, and source context.</p></div>
+      </aside>
+      </div>
+      <button class="inspector-backdrop" id="inspector-backdrop" type="button" aria-label="Close details" hidden></button>
     </main>
     <script src="/dashboard/holdings.js" defer></script>
+    <script src="/dashboard/field.js" defer></script>
     <script src="/dashboard/theme.js" defer></script>
   </body>
 </html>

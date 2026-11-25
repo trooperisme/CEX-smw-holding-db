@@ -5,28 +5,34 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Portfolio Tracker Dashboard</title>
     <link rel="stylesheet" href="/dashboard/admin.css" />
+    <link rel="stylesheet" href="/dashboard/editorial.css" />
+    <link rel="stylesheet" href="/dashboard/observatory.css" />
   </head>
   <body>
     <main class="layout">
       <header class="hero">
-        <h1>Top Holdings Tracker</h1>
-        <button id="run-scan" class="primary">Run Full Scan</button>
+        <div><p class="eyebrow">01 / OPERATIONS</p><h1>Top Holdings Tracker</h1></div>
+        <div class="admin-actions"><button class="theme-toggle" type="button" aria-label="Switch color theme">Light mode</button><button id="run-scan" class="primary" type="button">Run Full Scan</button></div>
       </header>
 
       <section class="card">
         <div class="section-header">
+          <span class="section-index">02 / EXECUTION</span>
           <h2>Scan Control Panel</h2>
-          <span id="scan-status" class="pill">Idle</span>
+          <span id="scan-status" class="pill" role="status" aria-live="polite">Idle</span>
         </div>
         <p id="last-scan">No scan yet</p>
-        <pre id="logs" class="logs"></pre>
+        <pre id="logs" class="logs" role="log" aria-label="Scan logs"></pre>
       </section>
 
       <section class="card">
         <div class="section-header">
+          <span class="section-index">03 / CLUSTERS</span>
           <h2>Cluster View</h2>
           <div class="filters">
+            <label class="sr-only" for="cluster-search">Search clusters</label>
             <input id="cluster-search" type="search" placeholder="Search token..." />
+            <label class="sr-only" for="snapshot-select">Cluster snapshot</label>
             <select id="snapshot-select"></select>
           </div>
         </div>
@@ -47,8 +53,10 @@
 
       <section class="card">
         <div class="section-header">
+          <span class="section-index">04 / WALLETS</span>
           <h2>Per-Wallet View</h2>
           <div class="filters">
+            <label class="sr-only" for="wallet-select">Tracked wallet</label>
             <select id="wallet-select"></select>
           </div>
         </div>
@@ -68,11 +76,14 @@
 
       <section class="card">
         <div class="section-header">
+          <span class="section-index">05 / COMPARISON</span>
           <h2>Comparison View</h2>
           <div class="filters">
+            <label class="sr-only" for="compare-a">Earlier snapshot</label>
             <select id="compare-a"></select>
+            <label class="sr-only" for="compare-b">Later snapshot</label>
             <select id="compare-b"></select>
-            <button id="load-diff">Compare</button>
+            <button id="load-diff" type="button">Compare</button>
           </div>
         </div>
         <table>
@@ -91,5 +102,6 @@
       </section>
     </main>
     <script src="/dashboard/main.js" defer></script>
+    <script src="/dashboard/theme.js" defer></script>
   </body>
 </html>
