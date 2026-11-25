@@ -11,11 +11,9 @@ import { loadSignalSnapshotCoverageSummary } from "./signal-coverage";
 import { buildSignalMarkdownExport } from "./signal-export";
 import { runSignalRefresh } from "./signal-refresh";
 import { createSignalStorage } from "./signal-storage";
-import { runSpotHoldingsScan } from "./spot-holdings";
+import { getSpotHoldingMinUsd, runSpotHoldingsScan } from "./spot-holdings";
 import { hasSupabaseStorage, loadLatestSpotHoldingsDashboard, persistSpotHoldingsSnapshot } from "./spot-storage";
-import { loadSpotHoldingsDashboardFromFile } from "./spot-dashboard";
-import { createMarketPulseReader } from "./market-pulse";
-import { scheduledRefresh } from "./refresh-schedule";
+import { classifySpotToken, getSpotTokenFilterConfig, normalizeSpotTokenSymbol } from "./spot-token-filter";
 import { createStorage } from "./storage";
 import { runSheetSyncToSupabase } from "./sync";
 import { loadTrackedTraders } from "./trader-registry";
@@ -83,7 +81,7 @@ const AUTH_SECRET =
 const RUN_SYNCHRONOUSLY = Boolean(process.env.VERCEL);
 const READ_ONLY_HOSTED = Boolean(process.env.VERCEL);
 const HOSTED_MUTATION_ERROR = "Vercel is read-only; run refreshes through GitHub Actions";
-const readMarketPulse = createMarketPulseReader();
+let marketPulseCache: { fetchedAt: number; payload: { asOf: string; coins: unknown[]; [key: string]: unknown } } | null = null;
 
 function rejectHostedMutation(res: express.Response): boolean {
   if (!READ_ONLY_HOSTED) return false;
@@ -110,28 +108,6 @@ function credentialsMatch(actual: string, expected: string): boolean {
   const actualDigest = crypto.createHash("sha256").update(actual).digest();
   const expectedDigest = crypto.createHash("sha256").update(expected).digest();
   return crypto.timingSafeEqual(actualDigest, expectedDigest);
-}
-
-function hasAtlasToken(req: express.Request): boolean {
-  const expected = String(process.env.ATLAS_STATUS_TOKEN || "").trim();
-  const authorization = String(req.get("authorization") || "");
-  const provided = authorization.startsWith("Bearer ") ? authorization.slice("Bearer ".length).trim() : "";
-  if (!expected || !provided) return false;
-  return credentialsMatch(provided, expected);
-}
-
-function vietnamDay(value: string | null | undefined): string | null {
-  if (!value || !Number.isFinite(new Date(value).getTime())) return null;
-  return new Intl.DateTimeFormat("en-CA", {
-    timeZone: "Asia/Ho_Chi_Minh",
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-  }).format(new Date(value));
-}
-
-function todayInVietnam(): string {
-  return vietnamDay(new Date().toISOString()) || "";
 }
 
 function createAuthCookieValue(): string {
@@ -204,12 +180,163 @@ function parseMarketType(input: unknown): SignalMarketType {
   return String(input || "").toLowerCase() === "tradfi" ? "tradfi" : "crypto";
 }
 
+function buildSpotUrl(walletAddress: string): string {
+  return `https://hypurrscan.io/address/${walletAddress}#spot`;
+}
+
+function getSpotHoldingsOutputPath() {
+  const spotDir = path.join(paths.processedDataDir, "spot-holdings");
+  const outputPath = path.join(spotDir, "spot-holdings.json");
+  const legacyOutputPath = path.join(spotDir, "spot-holdings-over-50.json");
+  return fs.existsSync(outputPath) || !fs.existsSync(legacyOutputPath) ? outputPath : legacyOutputPath;
+}
+
+function loadSpotHoldingsDashboardFromFile() {
+  const outputPath = getSpotHoldingsOutputPath();
+  const minUsd = getSpotHoldingMinUsd();
+  if (!fs.existsSync(outputPath)) {
+    return {
+      generatedAt: null,
+      outputPath: resolveWorkspaceFilePath(cwd, outputPath) ? path.relative(cwd, outputPath) : outputPath,
+      summary: {
+        tradersScanned: 0,
+        tradersWithRelevantHoldings: 0,
+        failures: 0,
+        minUsd,
+        rawHoldings: 0,
+        keptHoldings: 0,
+        relevantHoldings: 0,
+        filteredOut: { stable: 0, trash: 0, unrelated: 0 },
+        includeTokens: Array.from(getSpotTokenFilterConfig().includeTokens),
+        relevantTokens: Array.from(getSpotTokenFilterConfig().includeTokens),
+      },
+      rows: [],
+    };
+  }
+
+  const payload = JSON.parse(fs.readFileSync(outputPath, "utf-8")) as {
+    generatedAt?: string;
+    tradersScanned?: number;
+    failures?: number;
+    minUsd?: number;
+    tokenFilter?: {
+      includeTokens?: string[];
+      relevantTokens?: string[];
+      filteredOut?: { stable?: number; trash?: number; unrelated?: number };
+    };
+    results?: Array<{
+      traderName?: string;
+      walletAddress?: string;
+      spotUrl?: string;
+      holdings?: Array<{ token?: string; valueUsd?: number; valueText?: string }>;
+    }>;
+  };
+
+  const filterConfig = getSpotTokenFilterConfig();
+  const grouped = new Map<
+    string,
+    {
+      token: string;
+      holders: Map<
+        string,
+        {
+          traderName: string;
+          walletAddress: string;
+          spotUrl: string;
+          valueUsd: number;
+        }
+      >;
+      totalValueUsd: number;
+    }
+  >();
+  const filteredOut = { stable: 0, trash: 0, unrelated: 0 };
+  let rawHoldings = 0;
+  let keptHoldings = 0;
+
+  for (const trader of payload.results || []) {
+    const traderName = String(trader.traderName || "").trim();
+    const walletAddress = String(trader.walletAddress || "").trim().toLowerCase();
+    if (!traderName || !walletAddress) continue;
+
+    for (const holding of trader.holdings || []) {
+      rawHoldings += 1;
+      const token = normalizeSpotTokenSymbol(String(holding.token || ""));
+      const valueUsd = Number(holding.valueUsd || 0);
+      if (!Number.isFinite(valueUsd) || valueUsd <= minUsd) continue;
+
+      const category = classifySpotToken(token, filterConfig);
+      if (category !== "displayable") {
+        filteredOut[category] += 1;
+        continue;
+      }
+
+      keptHoldings += 1;
+
+      const entry =
+        grouped.get(token) ||
+        {
+          token,
+          holders: new Map(),
+          totalValueUsd: 0,
+        };
+      const existing = entry.holders.get(walletAddress);
+      entry.holders.set(walletAddress, {
+        traderName,
+        walletAddress,
+        spotUrl: String(trader.spotUrl || "") || buildSpotUrl(walletAddress),
+        valueUsd: (existing?.valueUsd || 0) + valueUsd,
+      });
+      entry.totalValueUsd += valueUsd;
+      grouped.set(token, entry);
+    }
+  }
+
+  const rows = Array.from(grouped.values())
+    .map((entry) => {
+      const holders = Array.from(entry.holders.values()).sort((a, b) => b.valueUsd - a.valueUsd);
+      const topHolder = holders[0] || null;
+      return {
+        token: entry.token,
+        holdersCount: holders.length,
+        totalValueUsd: Number(entry.totalValueUsd.toFixed(2)),
+        avgValueUsd: holders.length ? Number((entry.totalValueUsd / holders.length).toFixed(2)) : 0,
+        topHolderName: topHolder?.traderName || null,
+        topHolderWallet: topHolder?.walletAddress || null,
+        topHolderValueUsd: topHolder?.valueUsd || 0,
+        holders,
+      };
+    })
+    .sort((a, b) => {
+      if (b.holdersCount !== a.holdersCount) return b.holdersCount - a.holdersCount;
+      if (b.totalValueUsd !== a.totalValueUsd) return b.totalValueUsd - a.totalValueUsd;
+      return a.token.localeCompare(b.token, undefined, { sensitivity: "base" });
+    });
+
+  return {
+    generatedAt: payload.generatedAt || null,
+    outputPath: path.relative(cwd, outputPath),
+    summary: {
+      tradersScanned: Number(payload.tradersScanned || 0),
+      tradersWithRelevantHoldings: rows.reduce((count, row) => count + row.holdersCount, 0),
+      failures: Number(payload.failures || 0),
+      minUsd,
+      rawHoldings,
+      keptHoldings,
+      relevantHoldings: keptHoldings,
+      filteredOut: payload.tokenFilter?.filteredOut || filteredOut,
+      includeTokens: payload.tokenFilter?.includeTokens || payload.tokenFilter?.relevantTokens || Array.from(filterConfig.includeTokens),
+      relevantTokens: payload.tokenFilter?.includeTokens || payload.tokenFilter?.relevantTokens || Array.from(filterConfig.includeTokens),
+    },
+    rows,
+  };
+}
+
 async function loadSpotHoldingsDashboard() {
   if (process.env.VERCEL && !hasSupabaseStorage()) {
     throw new Error("SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are required on Vercel for spot holdings");
   }
   if (hasSupabaseStorage()) return loadLatestSpotHoldingsDashboard();
-  return loadSpotHoldingsDashboardFromFile(cwd);
+  return loadSpotHoldingsDashboardFromFile();
 }
 
 function startSpotHoldingsRefresh(): { started: boolean; alreadyRunning: boolean; promise: Promise<void> | null } {
@@ -349,7 +476,6 @@ app.get("/dashboard/", requireSignalsAuth, (_req, res) => {
 app.get("/api/health", (_req, res) => {
   res.json({
     ok: true,
-    scheduledRefresh,
     readOnly: READ_ONLY_HOSTED,
     running: runtime.running,
     syncRunning: runtime.syncRunning,
@@ -359,42 +485,30 @@ app.get("/api/health", (_req, res) => {
   });
 });
 
-app.get("/api/atlas-status", async (req, res) => {
-  if (!hasAtlasToken(req)) {
-    res.status(401).json({ product: "cex", snapshotState: "unavailable" });
-    return;
-  }
-
-  const storage = createSignalStorage(cwd);
-  try {
-    const signalSnapshotId = await storage.getLatestSignalSnapshotId();
-    const signalSnapshot = signalSnapshotId ? await storage.getSignalSnapshot(signalSnapshotId) : null;
-    const spotSnapshot = await loadSpotHoldingsDashboard();
-    const spotSnapshotId = "snapshotId" in spotSnapshot ? spotSnapshot.snapshotId : null;
-    const today = todayInVietnam();
-    const signalIsFresh = vietnamDay(signalSnapshot?.finished_at || signalSnapshot?.created_at) === today;
-    const spotIsFresh = vietnamDay(spotSnapshot.generatedAt) === today;
-    res.set("Cache-Control", "no-store").json({
-      product: "cex",
-      snapshotState: signalIsFresh && spotIsFresh ? "fresh" : "missing",
-      snapshotKey: signalSnapshotId && spotSnapshotId
-        ? `${signalSnapshotId}:${spotSnapshotId}`
-        : null,
-    });
-  } catch {
-    res.status(503).set("Cache-Control", "no-store").json({ product: "cex", snapshotState: "unavailable" });
-  } finally {
-    storage.close();
-  }
-});
-
 app.use("/api", requireSignalsAuth);
 
 app.get("/api/market-pulse", async (_req, res) => {
-  const pulse = await readMarketPulse();
-  res.set("Cache-Control", "private, no-store");
-  if (pulse.stale) res.set("X-Pulse-Stale", "true");
-  res.status(pulse.unavailable ? 503 : 200).json(pulse);
+  if (marketPulseCache && Date.now() - marketPulseCache.fetchedAt < 60_000) {
+    res.set("Cache-Control", "private, no-store").json(marketPulseCache.payload);
+    return;
+  }
+  try {
+    const response = await fetch("https://koalabot.io/api/market-pulse", { signal: AbortSignal.timeout(8_000) });
+    if (!response.ok) throw new Error(`Market Pulse returned ${response.status}`);
+    const payload = await response.json() as { asOf?: unknown; coins?: unknown; [key: string]: unknown };
+    if (!payload || typeof payload.asOf !== "string" || !Array.isArray(payload.coins)) {
+      throw new Error("Market Pulse returned an invalid payload");
+    }
+    marketPulseCache = { fetchedAt: Date.now(), payload: payload as { asOf: string; coins: unknown[]; [key: string]: unknown } };
+    res.set("Cache-Control", "private, no-store").json(payload);
+  } catch (error) {
+    if (marketPulseCache) {
+      res.set("Cache-Control", "private, no-store").set("X-Pulse-Stale", "true")
+        .json({ ...marketPulseCache.payload, stale: true });
+      return;
+    }
+    res.status(502).json({ error: (error as Error)?.message || "Market Pulse unavailable" });
+  }
 });
 
 app.get("/api/artifacts/file", (req, res) => {
