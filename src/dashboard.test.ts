@@ -44,3 +44,36 @@ test("position trader links preserve vault provenance, fall back to wallet and r
   assert.doesNotMatch(fallback, /javascript:/);
   assert.doesNotMatch(render({ traderName: "Missing wallet", walletAddress: "invalid" }), /<a /);
 });
+
+test("hosted scan demo never sends refresh requests, including when its controller is missing", async () => {
+  const source = fs.readFileSync(path.join(process.cwd(), "dashboard/holdings.js"), "utf8");
+  const start = source.indexOf('els.refreshButton.addEventListener("click"');
+  const end = source.indexOf('els.logoutButton.addEventListener("click"', start);
+  assert.ok(start > 0 && end > start);
+  for (const market of ["crypto", "tradfi", "spot", "orders"]) {
+    for (const controllerAvailable of [true, false]) {
+      let click: () => Promise<void> = async () => { throw new Error("click handler missing"); };
+      let demoOpened = 0;
+      let requests = 0;
+      let banner = "";
+      const context = vm.createContext({
+        state: { market, readOnlyHosted: true, localUiPreview: false, scanDemo: true },
+        window: controllerAvailable ? { scanPreview: { open() { demoOpened++; } } } : {},
+        els: { refreshButton: { addEventListener(_event: string, handler: () => Promise<void>) { click = handler; } } },
+        setBanner(message: string) { banner = message; },
+        isSpotView: () => market === "spot",
+        fetchJson: async () => { requests++; throw new Error("real request attempted"); },
+        updateCopyButton() {},
+      });
+      vm.runInContext(source.slice(start, end), context);
+      await click();
+      assert.equal(requests, 0, `${market}: no real refresh request`);
+      assert.equal(demoOpened, controllerAvailable ? 1 : 0);
+      if (!controllerAvailable) assert.match(banner, /No scan was started/);
+      // Older hosted deployments without the demo flag must also stay read-only.
+      vm.runInContext("state.scanDemo = false", context);
+      await click();
+      assert.equal(requests, 0);
+    }
+  }
+});

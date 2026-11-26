@@ -57,6 +57,7 @@ const state = {
   marketPulseError: false,
   scheduledRefresh: null,
   localUiPreview: false,
+  scanDemo: false,
 };
 
 const MAX_VISIBLE_SNAPSHOTS = 5;
@@ -342,16 +343,22 @@ function scheduledRefreshLabel() {
 
 function updateCopyButton() {
   if (els.refreshButton) {
-    els.refreshButton.textContent = isOrderView()
-      ? "Scheduled order scan"
-      : state.readOnlyHosted
-      ? scheduledRefreshLabel()
-      : state.refreshRunning
-      ? "Refreshing..."
-      : isSpotView()
-        ? "Refresh Spot"
-        : "Refresh Signals";
-    els.refreshButton.disabled = state.readOnlyHosted || state.refreshRunning || isOrderView();
+    if (state.scanDemo) {
+      els.refreshButton.textContent = window.scanPreview?.buttonLabel() || "Full Scan";
+      els.refreshButton.disabled = false;
+      els.refreshButton.title = "Demo only. No real scan is started.";
+    } else {
+      els.refreshButton.textContent = isOrderView()
+        ? "Scheduled order scan"
+        : state.readOnlyHosted
+        ? scheduledRefreshLabel()
+        : state.refreshRunning
+        ? "Refreshing..."
+        : isSpotView()
+          ? "Refresh Spot"
+          : "Refresh Signals";
+      els.refreshButton.disabled = state.readOnlyHosted || state.refreshRunning || isOrderView();
+    }
   }
   if (!els.copyButton) return;
   els.copyButton.disabled = isSpotView() || isOrderView() || !state.selectedSnapshotId || state.copyRunning;
@@ -1121,8 +1128,10 @@ async function loadInitialData() {
     const health = await fetchJson("/api/health");
     state.readOnlyHosted = Boolean(health.readOnly);
     state.localUiPreview = Boolean(health.localUiPreview);
+    state.scanDemo = Boolean(health.scanDemo);
     state.scheduledRefresh = health.scheduledRefresh || null;
-    if (health.readOnly && els.refreshButton) {
+    if (state.scanDemo) window.scanPreview?.enable();
+    if (health.readOnly && !state.scanDemo && els.refreshButton) {
       els.refreshButton.disabled = true;
       els.refreshButton.textContent = scheduledRefreshLabel();
       els.refreshButton.title = "Refreshes run from GitHub Actions and are read-only here.";
@@ -1350,6 +1359,14 @@ async function pollCombinedRefresh(snapshotId) {
 }
 
 els.refreshButton.addEventListener("click", async () => {
+  // Scan demos never enter the real refresh handlers, even if the demo
+  // illustration or controller fails to load.
+  if (state.scanDemo) {
+    if (window.scanPreview) window.scanPreview.open();
+    else setBanner("The scan demo could not load. Reload to retry. No scan was started.", "warning");
+    return;
+  }
+  if (state.readOnlyHosted) return;
   try {
     if (isSpotView()) {
       setBanner("Starting Hypurrscan spot holdings refresh...", "warning");
