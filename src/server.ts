@@ -19,6 +19,7 @@ import { runSheetSyncToSupabase } from "./sync";
 import { loadTrackedTraders } from "./trader-registry";
 import { SignalMarketType, SignalTraderRunRecord } from "./types";
 import { loadDurableOpenOrderDashboard } from "./open-order-storage";
+import { fullScanConfigured, getFullScanStatus, startFullScan } from "./full-scan-control";
 
 dotenv.config();
 
@@ -478,7 +479,8 @@ app.get("/api/health", (_req, res) => {
     ok: true,
     readOnly: READ_ONLY_HOSTED,
     localUiPreview: process.env.LOCAL_UI_PREVIEW === "1",
-    scanDemo: READ_ONLY_HOSTED,
+    scanDemo: process.env.LOCAL_UI_PREVIEW === "1",
+    fullScan: { remote: Boolean(process.env.VERCEL) && process.env.LOCAL_UI_PREVIEW !== "1", configured: fullScanConfigured() && Boolean(AUTH_PASSWORD) },
     running: runtime.running,
     syncRunning: runtime.syncRunning,
     jobsRunning: runtime.jobsRunning,
@@ -488,6 +490,36 @@ app.get("/api/health", (_req, res) => {
 });
 
 app.use("/api", requireSignalsAuth);
+
+app.get("/api/full-scan/status", async (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  if (!process.env.VERCEL || process.env.LOCAL_UI_PREVIEW === "1" || !AUTH_PASSWORD) {
+    res.status(409).json({ error: "Remote Full Scan is available only on the authenticated hosted dashboard." });
+    return;
+  }
+  try {
+    res.json(await getFullScanStatus(typeof req.query.runId === "string" ? req.query.runId : undefined,
+      typeof req.query.requestId === "string" ? req.query.requestId : undefined));
+  } catch (error) {
+    res.status(503).json({ error: (error as Error)?.message || "Unable to read scan progress" });
+  }
+});
+
+app.post("/api/full-scan", async (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  if (!process.env.VERCEL || process.env.LOCAL_UI_PREVIEW === "1" || !AUTH_PASSWORD) {
+    res.status(409).json({ error: "Remote Full Scan is available only on the authenticated hosted dashboard." });
+    return;
+  }
+  let sameOrigin = false;
+  try { sameOrigin = new URL(req.get("origin") || "").host === req.get("host"); } catch { /* Missing origin fails closed. */ }
+  if (!sameOrigin || req.get("sec-fetch-site") === "cross-site" || !req.is("application/json")) {
+    res.status(403).json({ error: "Start scans from this dashboard." });
+    return;
+  }
+  try { res.status(202).json(await startFullScan()); }
+  catch (error) { res.status(503).json({ error: (error as Error)?.message || "Unable to start Full Scan" }); }
+});
 
 app.get("/api/market-pulse", async (_req, res) => {
   if (marketPulseCache && Date.now() - marketPulseCache.fetchedAt < 60_000) {

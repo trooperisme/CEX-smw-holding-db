@@ -39,6 +39,8 @@ body:has(.scan-demo-dialog[open]) { overflow:hidden; }
 .scan-demo-stages li.is-active { border-color:var(--accent); background:color-mix(in srgb,var(--accent) 7%,var(--bg)); }
 .scan-demo-stages li.is-active .scan-demo-stage-count,.scan-demo-stages li.is-done .scan-demo-stage-count { color:var(--accent); }
 .scan-demo-stages li.is-done .scan-demo-stage-number { color:var(--accent); }
+.scan-demo-stages li.is-failed { border-color:var(--danger,#ff8f79); }
+.scan-demo-stages li.is-failed .scan-demo-stage-count { color:var(--danger,#ff8f79); }
 .scan-demo-result { padding:17px; margin-bottom:20px; border:1px solid var(--accent); background:color-mix(in srgb,var(--accent) 6%,var(--bg)); }
 .scan-demo-result h3 { font-size:24px; margin:8px 0; }
 .scan-demo-result p { font-size:12px; line-height:1.7; color:var(--muted); margin:0; }

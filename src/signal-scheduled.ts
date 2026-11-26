@@ -7,6 +7,7 @@ import { createSignalStorage } from "./signal-storage";
 import { runOpenOrderScan } from "./open-order-scan";
 import { persistOpenOrderSnapshot } from "./open-order-storage";
 import { TrackedTrader } from "./types";
+import { createScanProgressReporter, findScanCompletedSince, ScanStage, StageState } from "./full-scan-progress";
 
 dotenv.config();
 
@@ -37,6 +38,7 @@ type ScheduledRefreshOptions = {
   signalRetryRunner?: (traders: TrackedTrader[], snapshotId: number) => Promise<RunSignalRefreshResult>;
   spotRunner?: (traders: TrackedTrader[]) => Promise<ScheduledSpotRefreshResult>;
   openOrderRunner?: (traders: TrackedTrader[]) => Promise<ScheduledOpenOrderRefreshResult>;
+  onStage?: (stage: ScanStage, state: StageState) => Promise<void>;
 };
 
 export type ScheduledOpenOrderRefreshResult = {
@@ -132,12 +134,27 @@ export async function runScheduledRefresh(options: ScheduledRefreshOptions = {})
   validateScheduledTraders(traders);
   logger(`Loaded ${traders.length} active traders from durable registry`);
 
+  async function track<T>(stage: ScanStage, runner: () => Promise<T>): Promise<T> {
+    await options.onStage?.(stage, { status: "running" });
+    try {
+      const result = await runner();
+      const counts = result as { status?: string; tradersCompleted?: number; tradersScanned?: number };
+      await options.onStage?.(stage, {
+        status: stage === "perps" && counts.status !== "success" ? "partial" : "completed",
+        wallets: counts.tradersCompleted ?? counts.tradersScanned ?? traders.length,
+      });
+      return result;
+    } catch (error) {
+      await options.onStage?.(stage, { status: "failed", error: errorMessage(error) });
+      throw error;
+    }
+  }
   const [signalOutcome, spotOutcome, openOrderOutcome] = await Promise.allSettled([
-    (options.signalRunner || ((input) => runSignalRefresh({
+    track("perps", () => (options.signalRunner || ((input) => runSignalRefresh({
       cwd, logger, traders: input, replaceTrackedTraders: false, requireNonemptyOutput: true,
-    })))(traders),
-    (options.spotRunner || ((input) => refreshSpotHoldingsInAction(cwd, logger, input)))(traders),
-    (options.openOrderRunner || ((input) => refreshOpenOrdersInAction(logger, input)))(traders),
+    })))(traders)),
+    track("spot", () => (options.spotRunner || ((input) => refreshSpotHoldingsInAction(cwd, logger, input)))(traders)),
+    track("orders", () => (options.openOrderRunner || ((input) => refreshOpenOrdersInAction(logger, input)))(traders)),
   ]);
 
   let signal = signalOutcome.status === "fulfilled" ? signalOutcome.value : null;
@@ -153,7 +170,7 @@ export async function runScheduledRefresh(options: ScheduledRefreshOptions = {})
     if (retryRunner) {
       logger(`Retrying ${signal.tradersFailed} failed signal trader(s) in snapshot #${signal.snapshotId}`);
       try {
-        signal = await retryRunner(traders, signal.snapshotId);
+        signal = await track("perps", () => retryRunner(traders, signal!.snapshotId));
       } catch (error) {
         signalRetryError = error;
       }
@@ -197,7 +214,29 @@ export async function runScheduledRefresh(options: ScheduledRefreshOptions = {})
 }
 
 async function main(): Promise<void> {
-  const result = await runScheduledRefresh();
+  let reporter: ReturnType<typeof createScanProgressReporter> | null = null;
+  if (/^\d+$/.test(process.env.GITHUB_RUN_ID || "")) {
+    reporter = createScanProgressReporter(process.env.GITHUB_RUN_ID!);
+    try { await reporter.start(); } catch { reporter = null; console.warn("Scan progress storage unavailable; continuing with GitHub status only."); }
+  }
+  // Concurrency serializes scans. If another run satisfied this manual request
+  // while it waited, reuse that result rather than scraping the same data again.
+  if (reporter && process.env.SCAN_REQUESTED_AT) {
+    const previous = await findScanCompletedSince(process.env.SCAN_REQUESTED_AT).catch(() => null);
+    if (previous) {
+      await reporter.reuse(previous);
+      console.log(`Reused completed scan ${previous.runId} for this queued request.`);
+      return;
+    }
+  }
+  let result: ScheduledRefreshResult;
+  try {
+    result = await runScheduledRefresh({ onStage: reporter ? (stage, state) => reporter!.stage(stage, state) : undefined });
+    await reporter?.finish(result);
+  } catch (error) {
+    await reporter?.fail(errorMessage(error));
+    throw error;
+  }
   console.log(JSON.stringify(result, null, 2));
 
   if (result.status !== "success") {

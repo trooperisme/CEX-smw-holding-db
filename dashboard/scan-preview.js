@@ -114,8 +114,9 @@
 
   byId("close").addEventListener("click", close);
   byId("strip-open").addEventListener("click", open);
-  byId("replay").addEventListener("click", startDemo);
+  byId("replay").addEventListener("click", () => { if (enabled) startDemo(); });
   byId("action").addEventListener("click", () => {
+    if (!enabled) return;
     if (complete() && !showingResult) {
       showingResult = true;
       render();
