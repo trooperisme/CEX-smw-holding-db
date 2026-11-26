@@ -478,6 +478,7 @@ app.get("/api/health", (_req, res) => {
     ok: true,
     readOnly: READ_ONLY_HOSTED,
     localUiPreview: process.env.LOCAL_UI_PREVIEW === "1",
+    scanDemo: READ_ONLY_HOSTED,
     running: runtime.running,
     syncRunning: runtime.syncRunning,
     jobsRunning: runtime.jobsRunning,

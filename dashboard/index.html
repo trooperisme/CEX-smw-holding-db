@@ -7,6 +7,7 @@
     <link rel="stylesheet" href="/dashboard/styles.css" />
     <link rel="stylesheet" href="/dashboard/editorial.css" />
     <link rel="stylesheet" href="/dashboard/investigation.css" />
+    <link rel="stylesheet" href="/dashboard/scan-preview.css" />
   </head>
   <body>
     <div class="page-loader" id="page-loader" role="status" aria-live="polite">
@@ -34,6 +35,11 @@
           </button>
           <button class="action-button" id="logout-button" type="button">Log out</button>
         </div>
+      </section>
+
+      <section class="scan-demo-strip" id="scan-demo-strip" aria-label="Scan demo" hidden>
+        <div><span class="scan-demo-badge">DEMO</span><span id="scan-demo-strip-message">Try Full Scan · 48-second simulation · no real scan</span></div>
+        <button type="button" id="scan-demo-strip-open">Try demo ↗</button>
       </section>
 
       <section class="control-panel" aria-label="Dataset controls">
@@ -112,8 +118,48 @@
       </div>
       <button class="inspector-backdrop" id="inspector-backdrop" type="button" aria-label="Close details" hidden></button>
     </main>
+    <dialog class="scan-demo-dialog" id="scan-demo-dialog" aria-labelledby="scan-demo-title" aria-describedby="scan-demo-disclaimer">
+      <header class="scan-demo-heading">
+        <span class="section-index">FULL SCAN / RUN MONITOR</span>
+        <button type="button" id="scan-demo-close" aria-label="Close scan progress">×</button>
+      </header>
+      <div class="scan-demo-title-row"><h2 id="scan-demo-title">Full scan in progress</h2><span class="scan-demo-badge">SIMULATION</span></div>
+      <p class="scan-demo-disclaimer" id="scan-demo-disclaimer">UI demo only. No real scan runs and no new snapshot is saved.</p>
+      <div class="scan-demo-main">
+        <figure class="scan-demo-art">
+          <img id="scan-demo-gif" width="480" height="262" alt="" />
+          <div class="scan-demo-still" aria-hidden="true">◌</div>
+          <div class="scan-demo-complete-mark" aria-hidden="true">✓</div>
+          <figcaption id="scan-demo-art-caption">A little company while you wait.</figcaption>
+        </figure>
+        <div class="scan-demo-readout">
+          <p class="scan-demo-run-id" id="scan-demo-run-id"></p>
+          <div class="scan-demo-progress-label"><strong id="scan-demo-stage">Preparing demo</strong><span id="scan-demo-percent">0%</span></div>
+          <progress id="scan-demo-progress" max="100" value="0" aria-label="Simulated full scan progress"></progress>
+          <p class="scan-demo-stage-detail" id="scan-demo-stage-detail"></p>
+          <div class="scan-demo-clock"><span id="scan-demo-elapsed">Elapsed 00:00</span><span id="scan-demo-remaining">Demo ends in 00:48</span></div>
+          <p class="scan-demo-live-note" id="scan-demo-live-note" role="status" aria-live="polite"></p>
+        </div>
+      </div>
+      <ol class="scan-demo-stages" aria-label="Simulated scan stages">
+        <li data-demo-stage="perps"><span class="scan-demo-stage-number">01</span><div><strong>Perps</strong><small>Crypto + TradFi</small></div><span class="scan-demo-stage-count">Queued</span></li>
+        <li data-demo-stage="spot"><span class="scan-demo-stage-number">02</span><div><strong>Spot</strong><small>Wallet holdings</small></div><span class="scan-demo-stage-count">Queued</span></li>
+        <li data-demo-stage="orders"><span class="scan-demo-stage-number">03</span><div><strong>Limit orders</strong><small>Open order intent</small></div><span class="scan-demo-stage-count">Queued</span></li>
+      </ol>
+      <section class="scan-demo-result" id="scan-demo-result" aria-label="Demo scan result" hidden>
+        <span class="section-index">DEMO RESULT / NO DATA WRITTEN</span>
+        <h3>All three stages completed</h3>
+        <p>This is where the new snapshot would be available after a real scan. In this mockup, your saved snapshots stay unchanged.</p>
+      </section>
+      <div class="scan-demo-schedule"><span>Scheduled runs stay active</span><span>02:17 GMT+7 · backup 06:47</span></div>
+      <footer class="scan-demo-footer">
+        <p id="scan-demo-browse-note">Close this window to browse older snapshots. Full Scan reopens the same progress.</p>
+        <div><button type="button" class="action-button" id="scan-demo-replay" hidden>Run demo again</button><button type="button" class="action-button action-button--primary" id="scan-demo-action">Browse snapshots</button></div>
+      </footer>
+    </dialog>
     <script src="/dashboard/holdings.js" defer></script>
     <script src="/dashboard/field.js" defer></script>
     <script src="/dashboard/theme.js" defer></script>
+    <script src="/dashboard/scan-preview.js" defer></script>
   </body>
 </html>
