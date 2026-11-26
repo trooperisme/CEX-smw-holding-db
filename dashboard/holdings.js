@@ -58,6 +58,7 @@ const state = {
   scheduledRefresh: null,
   localUiPreview: false,
   scanDemo: false,
+  fullScanRemote: false,
 };
 
 const MAX_VISIBLE_SNAPSHOTS = 5;
@@ -343,10 +344,11 @@ function scheduledRefreshLabel() {
 
 function updateCopyButton() {
   if (els.refreshButton) {
-    if (state.scanDemo) {
-      els.refreshButton.textContent = window.scanPreview?.buttonLabel() || "Full Scan";
+    if (state.scanDemo || state.fullScanRemote) {
+      const controller = state.fullScanRemote ? window.scanMonitor : window.scanPreview;
+      els.refreshButton.textContent = controller?.buttonLabel() || "Full Scan";
       els.refreshButton.disabled = false;
-      els.refreshButton.title = "Demo only. No real scan is started.";
+      els.refreshButton.title = state.fullScanRemote ? "Start a full scan or reopen its progress." : "Demo only. No real scan is started.";
     } else {
       els.refreshButton.textContent = isOrderView()
         ? "Scheduled order scan"
@@ -1129,9 +1131,11 @@ async function loadInitialData() {
     state.readOnlyHosted = Boolean(health.readOnly);
     state.localUiPreview = Boolean(health.localUiPreview);
     state.scanDemo = Boolean(health.scanDemo);
+    state.fullScanRemote = Boolean(health.fullScan?.remote);
     state.scheduledRefresh = health.scheduledRefresh || null;
     if (state.scanDemo) window.scanPreview?.enable();
-    if (health.readOnly && !state.scanDemo && els.refreshButton) {
+    if (state.fullScanRemote) window.scanMonitor?.enable();
+    if (health.readOnly && !state.scanDemo && !state.fullScanRemote && els.refreshButton) {
       els.refreshButton.disabled = true;
       els.refreshButton.textContent = scheduledRefreshLabel();
       els.refreshButton.title = "Refreshes run from GitHub Actions and are read-only here.";
@@ -1359,6 +1363,11 @@ async function pollCombinedRefresh(snapshotId) {
 }
 
 els.refreshButton.addEventListener("click", async () => {
+  if (state.fullScanRemote) {
+    if (window.scanMonitor) window.scanMonitor.open();
+    else setBanner("The scan monitor could not load. Reload to retry. No scan was started.", "warning");
+    return;
+  }
   // Scan demos never enter the real refresh handlers, even if the demo
   // illustration or controller fails to load.
   if (state.scanDemo) {

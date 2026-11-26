@@ -1,4 +1,5 @@
 name: CEX scheduled refresh
+run-name: "${{ inputs.sync_registry_only && 'Registry sync' || inputs.resume_signal_snapshot_id != '' && 'Resume scan' || 'Full scan' }} · ${{ github.event_name }} ${{ inputs.scan_request_id }}"
 
 on:
   schedule:
@@ -7,6 +8,16 @@ on:
     - cron: "47 23 * * *"
   workflow_dispatch:
     inputs:
+      scan_request_id:
+        description: Dashboard request ID for locating the same scan
+        type: string
+        required: false
+        default: ""
+      scan_requested_at:
+        description: Dashboard request timestamp for suppressing duplicate queued scans
+        type: string
+        required: false
+        default: ""
       sync_registry_only:
         description: Sync the tracked trader registry without starting a scrape
         type: boolean
@@ -79,6 +90,7 @@ jobs:
       - name: Run scheduled refresh
         if: ${{ !inputs.sync_registry_only && inputs.resume_signal_snapshot_id == '' && (github.event_name != 'schedule' || steps.daily_guard.outputs.should_run == 'true') }}
         env:
+          SCAN_REQUESTED_AT: ${{ inputs.scan_requested_at }}
           FIRECRAWL_API_KEY: ${{ secrets.FIRECRAWL_API_KEY }}
           SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
           SUPABASE_SERVICE_ROLE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
@@ -89,6 +101,7 @@ jobs:
           SPOT_HOLDING_CONCURRENCY: ${{ vars.SPOT_HOLDING_CONCURRENCY || '4' }}
           SPOT_HOLDING_MIN_USD: ${{ vars.SPOT_HOLDING_MIN_USD || '333' }}
           SPOT_HOLDING_CACHE_TTL_HOURS: ${{ vars.SPOT_HOLDING_CACHE_TTL_HOURS || '6' }}
+          SPOT_HOLDING_FORCE_REFETCH: ${{ inputs.scan_request_id != '' && '1' || '0' }}
           HYPERLIQUID_OPEN_ORDERS_CONCURRENCY: ${{ vars.HYPERLIQUID_OPEN_ORDERS_CONCURRENCY || '6' }}
           HYPERLIQUID_OPEN_ORDERS_MIN_INTERVAL_MS: ${{ vars.HYPERLIQUID_OPEN_ORDERS_MIN_INTERVAL_MS || '1500' }}
         run: npm run signals:scheduled
