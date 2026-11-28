@@ -111,6 +111,28 @@ function credentialsMatch(actual: string, expected: string): boolean {
   return crypto.timingSafeEqual(actualDigest, expectedDigest);
 }
 
+function hasAtlasToken(req: express.Request): boolean {
+  const expected = String(process.env.ATLAS_STATUS_TOKEN || "").trim();
+  const authorization = String(req.get("authorization") || "");
+  const provided = authorization.startsWith("Bearer ") ? authorization.slice("Bearer ".length).trim() : "";
+  if (!expected || !provided) return false;
+  return credentialsMatch(provided, expected);
+}
+
+function vietnamDay(value: string | null | undefined): string | null {
+  if (!value || !Number.isFinite(new Date(value).getTime())) return null;
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Ho_Chi_Minh",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date(value));
+}
+
+function todayInVietnam(): string {
+  return vietnamDay(new Date().toISOString()) || "";
+}
+
 function createAuthCookieValue(): string {
   const expiresAt = Date.now() + AUTH_COOKIE_MAX_AGE_MS;
   const payload = JSON.stringify({ expiresAt });
@@ -487,6 +509,35 @@ app.get("/api/health", (_req, res) => {
     signalsRunning: runtime.signalsRunning,
     spotRunning: runtime.spotRunning,
   });
+});
+
+app.get("/api/atlas-status", async (req, res) => {
+  if (!hasAtlasToken(req)) {
+    res.status(401).json({ product: "cex", snapshotState: "unavailable" });
+    return;
+  }
+
+  const storage = createSignalStorage(cwd);
+  try {
+    const signalSnapshotId = await storage.getLatestSignalSnapshotId();
+    const signalSnapshot = signalSnapshotId ? await storage.getSignalSnapshot(signalSnapshotId) : null;
+    const spotSnapshot = await loadSpotHoldingsDashboard();
+    const spotSnapshotId = "snapshotId" in spotSnapshot ? spotSnapshot.snapshotId : null;
+    const today = todayInVietnam();
+    const signalIsFresh = vietnamDay(signalSnapshot?.finished_at || signalSnapshot?.created_at) === today;
+    const spotIsFresh = vietnamDay(spotSnapshot.generatedAt) === today;
+    res.set("Cache-Control", "no-store").json({
+      product: "cex",
+      snapshotState: signalIsFresh && spotIsFresh ? "fresh" : "missing",
+      snapshotKey: signalSnapshotId && spotSnapshotId
+        ? `${signalSnapshotId}:${spotSnapshotId}`
+        : null,
+    });
+  } catch {
+    res.status(503).set("Cache-Control", "no-store").json({ product: "cex", snapshotState: "unavailable" });
+  } finally {
+    storage.close();
+  }
 });
 
 app.use("/api", requireSignalsAuth);
